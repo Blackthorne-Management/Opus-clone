@@ -1,0 +1,113 @@
+# KIR Auto-Clipper configuration.
+# Paths may use ~ (your Windows user folder, e.g. C:\Users\Rael). Forward or back slashes both work.
+# Put machine-specific overrides in config.local.yaml (same keys, git-ignored).
+
+paths:
+  inbox: ~/Streams/inbox          # OBS recording output folder (or point OBS here)
+  processed: ~/Streams/processed  # originals are moved here after processing, never deleted
+  failed: ~/Streams/failed        # sources that errored are moved here for inspection
+  data: ~/Streams/kir-data        # database, transcripts, rendered clips, logs
+
+watcher:
+  extensions: [".mp4", ".mkv", ".mov", ".flv"]
+  stable_seconds: 60        # file size must be unchanged this long before processing
+  poll_seconds: 10          # how often to re-check pending files
+  remux_mkv: false          # .flv is always remuxed to .mp4; set true to also remux .mkv (stream copy, uses extra disk)
+
+transcription:
+  backend: faster-whisper   # faster-whisper (local) | openai (Whisper API)
+  model: large-v3           # faster-whisper model; use "medium" or "small" on CPU
+  device: auto              # auto | cuda | cpu
+  compute_type: auto        # auto picks float16 on GPU, int8 on CPU
+  language: en
+  chunk_minutes: 20         # audio is transcribed in chunks so 3-hour streams stay in memory
+  overlap_seconds: 20
+
+llm:
+  model: claude-opus-5-5
+  effort: medium            # low | medium | high
+  window_minutes: 25        # transcript is analysed in windows of this length
+  window_overlap_minutes: 3
+  max_retries: 4
+
+highlights:
+  criteria_file: virality_criteria.md
+  min_seconds: 20
+  max_seconds: 90
+  preferred_min_seconds: 30
+  preferred_max_seconds: 60
+  max_clips_per_stream: 12
+  overlap_dedupe_ratio: 0.5      # >50% overlap keeps the higher score
+  snap_silence_seconds: 0.35     # gap that counts as a natural pause for boundary snapping
+  lead_in_seconds: 0.15          # tiny padding before first word
+  tail_seconds: 0.45             # padding after last word
+
+review:
+  dry_run: true             # log-only mode: score + render, post nothing. Turn off after tuning.
+  auto_post_threshold: 90   # >= this posts automatically
+  auto_reject_floor: 60     # < this is dropped and logged, never queued
+  render_rejected: false    # set true to render dropped clips anyway (useful during tuning)
+
+render:
+  width: 1080
+  height: 1920
+  encoder: auto             # auto | h264_nvenc | libx264
+  crf: 20                   # quality for libx264 (lower = better)
+  nvenc_cq: 23              # quality for NVENC
+  audio_bitrate: 192k
+  default_recipe:
+    caption_style: bold_pop
+    crop_mode: face          # face | center | blur_pad
+    zoom: punch              # none | punch | slow_push
+    hook_overlay: true
+    outro_cta: true
+
+brand:
+  name: Keepingit_Rael
+  font: Montserrat ExtraBold         # must be installed on Windows (or put the .ttf in brand/fonts)
+  fonts_dir: brand/fonts
+  primary_color: "#FFFFFF"
+  highlight_color: "#FFD400"
+  accent_color: "#E63946"
+  outline_color: "#000000"
+  logo: brand/logo.png               # owner's own logo only; leave missing to skip watermark
+  logo_opacity: 0.85
+  cta_text: "Follow @Keepingit_Rael for more"
+
+publishing:
+  provider: upload_post       # upload_post | dry_run
+  upload_post:
+    base_url: https://api.upload-post.com/api
+    user: kir                 # the Upload-Post profile name you connected your accounts to
+    timezone: America/New_York
+  platforms: [tiktok, instagram, youtube]
+  # Posting slots in local time. Clips are spread across these, never dumped at once.
+  slots: ["11:30", "15:30", "19:30"]
+  max_posts_per_day:
+    tiktok: 3
+    instagram: 2
+    youtube: 3
+    facebook: 2
+    x: 3
+  min_gap_minutes: 180        # minimum spacing between posts on the same platform
+  max_days_ahead:
+    tiktok: 10
+    default: 365
+  status_poll_seconds: 30     # Upload-Post asks for >= 5s
+  retry_backoff_minutes: [5, 20, 60]
+  max_attempts: 4
+
+reedit:
+  interval_days: 90           # set to 1 to test
+  max_reposts_per_week: 4
+  skip_below_median: true     # once performance data exists, skip clips that underperformed
+  severe_underperform_ratio: 0.5
+
+performance:
+  enabled: false              # turn on once Upload-Post analytics access is confirmed
+
+logging:
+  level: INFO
+
+daily:
+  hour: 9                     # local hour for the daily summary and the re-edit job

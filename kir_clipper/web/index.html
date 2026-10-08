@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KIR Clipper</title>
+<style>
+  :root { --bg:#f6f6f4; --card:#fff; --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e2de; --accent:#e63946; --ok:#2a9d5c; --warn:#d98e04; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121212; --card:#1d1d1d; --ink:#eee; --muted:#9a9a9a; --line:#333; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; gap:16px; align-items:center; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:2; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  .pill { padding:3px 10px; border-radius:99px; font-size:12px; font-weight:600; }
+  .dry { background:var(--warn); color:#000; } .live { background:var(--ok); color:#fff; }
+  nav { display:flex; gap:4px; flex-wrap:wrap; }
+  nav button { border:1px solid var(--line); background:transparent; color:var(--ink); padding:6px 12px; border-radius:6px; cursor:pointer; }
+  nav button.on { background:var(--ink); color:var(--bg); }
+  main { padding:20px; max-width:1300px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(560px, 1fr)); gap:16px; }
+  @media (max-width:640px) { .grid { grid-template-columns:1fr; } main { padding:16px; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; display:flex; gap:14px; }
+  @media (max-width:640px) { .card { flex-direction:column; } }
+  video { width:200px; aspect-ratio:9/16; background:#000; border-radius:6px; flex-shrink:0; }
+  .body { flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
+  .score { font-size:22px; font-weight:800; }
+  .s-hi { color:var(--ok); } .s-mid { color:var(--warn); } .s-lo { color:var(--accent); }
+  .muted { color:var(--muted); font-size:12px; }
+  label { font-size:12px; color:var(--muted); display:block; }
+  input, textarea, select { width:100%; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+  textarea { min-height:56px; resize:vertical; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .row > * { flex:1; min-width:90px; }
+  .btn { border:0; padding:8px 12px; border-radius:6px; cursor:pointer; font-weight:600; }
+  .approve { background:var(--ok); color:#fff; } .reject { background:var(--accent); color:#fff; } .plain { background:var(--line); color:var(--ink); }
+  details summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; background:var(--card); }
+  td, th { padding:7px 10px; border-bottom:1px solid var(--line); text-align:left; font-size:13px; vertical-align:top; }
+  pre { background:var(--card); border:1px solid var(--line); padding:12px; border-radius:8px; white-space:pre-wrap; }
+  .hist { display:flex; align-items:flex-end; gap:6px; height:120px; margin:10px 0 4px; }
+  .hist div { flex:1; background:var(--muted); border-radius:3px 3px 0 0; min-height:2px; position:relative; }
+  .hist span { position:absolute; top:-18px; width:100%; text-align:center; font-size:11px; }
+  .empty { color:var(--muted); padding:40px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>KIR Clipper</h1>
+  <span id="mode" class="pill"></span>
+  <nav id="tabs"></nav>
+</header>
+<main id="view"></main>
+<script>
+const TABS = [
+  ["review", "Needs review"], ["dry_run", "Would auto-post"], ["approved,scheduled", "Scheduled"],
+  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["posts", "Post calendar"],
+  ["stats", "Stats"], ["events", "Activity log"],
+];
+let current = location.hash.slice(1) || "review";
+let summary = {};
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const when = iso => iso ? new Date(iso).toLocaleString([], {weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone: summary.timezone || undefined}) : "";
+const scoreClass = s => s >= (summary.auto_post_threshold||90) ? "s-hi" : s >= (summary.auto_reject_floor||60) ? "s-mid" : "s-lo";
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  if (!r.ok) { alert((await r.json().catch(()=>({detail:r.statusText}))).detail); throw new Error(r.status); }
+  return r.json();
+}
+function renderTabs() {
+  $("#tabs").innerHTML = TABS.map(([k, l]) => {
+    const n = k.includes("posts")||k==="stats"||k==="events" ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
+    return `<button class="${k===current?"on":""}" data-k="${k}">${l}${n!==""?` (${n})`:""}</button>`;
+  }).join("");
+  $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { current = b.dataset.k; location.hash = current; load(); });
+  const m = $("#mode"); m.className = "pill " + (summary.dry_run ? "dry" : "live");
+  m.textContent = summary.dry_run ? "DRY RUN: nothing posts" : "LIVE: auto-posting " + summary.auto_post_threshold + "+";
+}
+function clipCard(c) {
+  const styles = ["bold_pop","karaoke","boxed","minimal"], crops = ["face","center","blur_pad"], zooms = ["none","punch","slow_push"];
+  const r = c.recipe || {};
+  const sel = (name, opts, v) => `<select data-r="${name}">${opts.map(o => `<option ${o===v?"selected":""}>${o}</option>`).join("")}</select>`;
+  const posts = c.posts.map(p => `${p.platform}: ${p.status} ${when(p.publish_at)}${p.last_error?` (${esc(p.last_error)})`:""}`).join("<br>");
+  const canAct = ["review","dry_run","dropped"].includes(c.status);
+  return `<div class="card" data-id="${c.id}">
+    ${c.file_path ? `<video src="/media/clip/${c.id}" controls preload="metadata"></video>` : `<div class="muted" style="width:200px">not rendered</div>`}
+    <div class="body">
+      <div class="row" style="align-items:baseline"><span class="score ${scoreClass(c.score)}">${c.score}</span>
+        <span class="muted">clip ${c.id}${c.version>1?` · re-edit v${c.version} of ${c.parent_clip_id}`:""} · ${c.duration}s · ${c.status}${c.note?` · ${esc(c.note)}`:""}</span></div>
+      <div><b>Hook:</b> ${esc(c.hook)}</div>
+      <div class="muted">${esc(c.reason)}</div>
+      ${c.suggested_time ? `<div class="muted">Next free slot: ${when(c.suggested_time)}</div>` : ""}
+      ${posts ? `<div class="muted">${posts}</div>` : ""}
+      <label>Title<input data-f="title" value="${esc(c.title)}"></label>
+      <label>Caption<textarea data-f="caption">${esc(c.caption)}</textarea></label>
+      <label>Hashtags<input data-f="hashtags" value="${esc((c.hashtags||[]).join(" "))}"></label>
+      <details><summary>Per-platform copy</summary>${Object.entries(c.copy).map(([p, v]) =>
+        `<label>${p} title<input data-p="${p}" data-k="title" value="${esc(v.title)}"></label>
+         <label>${p} caption<textarea data-p="${p}" data-k="caption">${esc(v.caption)}</textarea></label>`).join("")}</details>
+      <details><summary>Re-render (style, crop, zoom, timing)</summary>
+        <div class="row">${sel("caption_style", styles, r.caption_style)}${sel("crop_mode", crops, r.crop_mode)}${sel("zoom", zooms, r.zoom)}</div>
+        <div class="row"><label>Start (s)<input data-b="start" value="${c.start}"></label><label>End (s)<input data-b="end" value="${c.end}"></label>
+          <label>Hook overlay<input data-r="hook_text" value="${esc(r.hook_text)}"></label></div>
+        <button class="btn plain" data-a="render">Re-render</button>
+      </details>
+      <div class="row">
+        ${canAct ? `<button class="btn approve" data-a="approve">Approve &amp; schedule</button>` : ""}
+        <button class="btn plain" data-a="save">Save copy</button>
+        ${c.status !== "rejected" && !["posted","scheduled"].includes(c.status) ? `<button class="btn reject" data-a="reject">Reject</button>` : ""}
+        ${c.status === "posted" ? `<select data-a="flag"><option value="">Repost: automatic</option><option value="no_repost" ${c.note==="no_repost"?"selected":""}>Never repost</option><option value="force_repost" ${c.note==="force_repost"?"selected":""}>Always repost</option></select>` : ""}
+      </div>
+    </div></div>`;
+}
+function collect(card) {
+  const pc = {};
+  card.querySelectorAll("[data-p]").forEach(el => { (pc[el.dataset.p] ||= {})[el.dataset.k] = el.value; });
+  return { title: $("[data-f=title]", card).value, caption: $("[data-f=caption]", card).value,
+    hashtags: $("[data-f=hashtags]", card).value.split(/\s+/).filter(Boolean), platform_captions: pc };
+}
+function wire() {
+  document.querySelectorAll(".card").forEach(card => {
+    const id = card.dataset.id;
+    card.querySelectorAll("button[data-a]").forEach(b => b.onclick = async () => {
+      b.disabled = true; const a = b.dataset.a;
+      try {
+        if (a === "approve") { await api(`/api/clips/${id}/edit`, collect(card)); await api(`/api/clips/${id}/approve`, {}); }
+        if (a === "reject") await api(`/api/clips/${id}/reject`, {note: prompt("Why? (optional)") || null});
+        if (a === "save") await api(`/api/clips/${id}/edit`, collect(card));
+        if (a === "render") {
+          const recipe = {}; card.querySelectorAll("[data-r]").forEach(el => recipe[el.dataset.r] = el.value);
+          const body = {...collect(card), recipe}; card.querySelectorAll("[data-b]").forEach(el => body[el.dataset.b] = el.value);
+          b.textContent = "Rendering..."; await api(`/api/clips/${id}/edit`, body);
+        }
+        load();
+      } finally { b.disabled = false; }
+    });
+    const f = $("select[data-a=flag]", card);
+    if (f) f.onchange = () => api(`/api/clips/${id}/flag`, {note: f.value || null});
+  });
+}
+async function load() {
+  summary = await api("/api/summary"); renderTabs();
+  const v = $("#view");
+  if (current === "stats") {
+    const h = summary.histogram, max = Math.max(1, ...h);
+    v.innerHTML = `<h3>Score distribution (original clips)</h3>
+      <div class="hist">${h.map(n => `<div style="height:${n/max*100}%"><span>${n||""}</span></div>`).join("")}</div>
+      <div class="row muted">${h.map((_, i) => `<span style="text-align:center">${i*10}</span>`).join("")}</div>
+      <p class="muted">Auto-post at ${summary.auto_post_threshold}+, drop below ${summary.auto_reject_floor}. Tune in config.yaml.</p>
+      <h3>Score vs real performance</h3><pre>${esc(summary.performance)}</pre>
+      <h3>Recent streams</h3><table><tr><th>#</th><th>file</th><th>min</th><th>status</th><th>processed</th></tr>
+      ${summary.streams.map(s => `<tr><td>${s.id}</td><td>${esc(s.original_path)}</td><td>${Math.round((s.duration||0)/60)}</td><td>${s.status}${s.error?`<br><span class="muted">${esc(s.error)}</span>`:""}</td><td>${when(s.processed_at)}</td></tr>`).join("")}</table>`;
+    return;
+  }
+  if (current === "posts") {
+    const posts = await api("/api/posts");
+    v.innerHTML = posts.length ? `<table><tr><th>when</th><th>platform</th><th>clip</th><th>status</th><th></th></tr>${posts.map(p =>
+      `<tr><td>${when(p.publish_at)}</td><td>${p.platform}</td><td>${p.clip_id} · ${esc(p.title)} (${p.score})</td><td>${p.status}${p.last_error?`<br><span class="muted">${esc(p.last_error)}</span>`:""}</td>
+       <td>${p.status==="planned"?`<button class="btn plain" onclick="api('/api/posts/${p.id}/cancel',{}).then(load)">Cancel</button>`:""}</td></tr>`).join("")}</table>`
+      : `<div class="empty">No posts yet.</div>`;
+    return;
+  }
+  if (current === "events") {
+    const ev = await api("/api/events");
+    v.innerHTML = `<table>${ev.map(e => `<tr><td>${when(e.at)}</td><td>${e.kind}</td><td>${esc(e.ref)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join("")}</table>`;
+    return;
+  }
+  const clips = await api(`/api/clips?status=${current}`);
+  v.innerHTML = clips.length ? `<div class="grid">${clips.map(clipCard).join("")}</div>` : `<div class="empty">Nothing here.</div>`;
+  wire();
+}
+load();
+</script>
+</body>
+</html>
