@@ -144,6 +144,22 @@ def cmd_perf_report(args) -> int:
     return 0
 
 
+def cmd_longform(args) -> int:
+    from .longform import build, set_segments
+    cfg, conn = _ctx(args)
+    if args.action == "list":
+        for r in conn.execute("SELECT * FROM longform ORDER BY stream_id, idx"):
+            print(f"#{r['id']} stream {r['stream_id']} part {r['idx']} {r['start']:.0f}-{r['end']:.0f}s "
+                  f"{r['status']} {r['error'] or ''}")
+    elif args.action == "build":
+        print(f"clip id: {build(cfg, conn, args.id)}")
+    elif args.action == "whole":
+        stream = conn.execute("SELECT duration FROM streams WHERE id=?", (args.id,)).fetchone()
+        ids = set_segments(conn, args.id, [{"start": 0, "end": stream["duration"]}], stream["duration"])
+        print(f"queued long-form job(s): {ids}")
+    return 0
+
+
 def cmd_run(args) -> int:
     """Everything in one long-running process: watcher, publisher loop, daily jobs, dashboard."""
     import uvicorn
@@ -188,6 +204,19 @@ def cmd_run(args) -> int:
             stop.wait(interval)
 
     threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
+
+    def longform_loop():
+        from .longform import worker_tick
+        lconn = db.connect(cfg.db_path)
+        while not stop.is_set():
+            try:
+                if worker_tick(cfg, lconn) is None:
+                    stop.wait(20)
+            except Exception:
+                log.exception("Long-form worker error")
+                stop.wait(60)
+
+    threading.Thread(target=longform_loop, name="longform", daemon=True).start()
 
     tz = ZoneInfo(cfg.get("publishing.upload_post.timezone") or "UTC")
     daily_hour = int(cfg.get("daily.hour", 9))
@@ -245,6 +274,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("csv")
     s.set_defaults(fn=cmd_perf_import)
     sub.add_parser("perf-report", help="score vs performance report").set_defaults(fn=cmd_perf_report)
+    s = sub.add_parser("longform", help="long-form YouTube edits: list | build <longform id> | whole <stream id>")
+    s.add_argument("action", choices=["list", "build", "whole"])
+    s.add_argument("id", type=int, nargs="?")
+    s.set_defaults(fn=cmd_longform)
 
     args = p.parse_args(argv)
     return args.fn(args)

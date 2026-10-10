@@ -171,6 +171,58 @@ Test it without waiting 90 days: `kir reedit --interval-days 1`.
 
 ---
 
+## 5b. Long-form YouTube version of every stream
+
+Besides the clips, each stream also becomes a full-length, lightly edited YouTube video.
+
+**The edit stays mostly intact.** Only moments where you aren't actually delivering content are removed:
+
+| Cut | Example |
+|---|---|
+| distracted | looking at something else, side conversation |
+| interrupted | cut off by the door/phone/someone walking in, restarting a sentence |
+| chat_reading | reading usernames, comments, shout-outs aloud. If a chat question leads into a real answer, only the reading-out is cut; your answer stays |
+| tech_issue | "can you hear me", fixing OBS or the mic |
+| away | AFK, "be right back" |
+| housekeeping | "starting soon", setup, ad reads |
+
+Claude only cuts what it is at least 70% sure about (`min_cut_confidence`), and never more than 25% of a
+video (`max_cut_ratio`). Pauses longer than 3 seconds are shortened to 0.8 seconds. Remove a category
+from `longform.cut_categories` in `config.yaml` if you never want it cut (for example, delete
+`chat_reading` if you'd rather keep chat interaction in).
+
+**What gets added:** an animated intro (video title + your brand), a "CHAPTER N" title card at each new
+topic, lower-third topic banners that slide in, pop-up key points, quick punch-in zooms on emphasis, a
+"Subscribe" reminder a third of the way in, your logo watermark, and an outro. YouTube chapters, title,
+description and tags are written for you.
+
+To use your own designed intro/outro instead of the generated ones, put them at `brand\intro.mp4` and
+`brand\outro.mp4`. Set `longform.outro_lines` to change the outro text.
+
+**How it works day to day:**
+
+1. After a stream is processed, the dashboard's **Long-form** tab shows it with suggested segments
+   (a silence of 3+ minutes is pre-filled as a split point).
+2. Keep it as one video, or click **+ Split** and set the start/end times (h:mm:ss) for each segment.
+   Each segment becomes its own YouTube video. Click **Build**.
+3. Claude plans the edit and the video renders in the background. On CPU only, rendering took about
+   two-thirds of the video's length in testing (so roughly 80 minutes for a 2-hour stream); NVENC on an
+   NVIDIA GPU should be noticeably faster, but that hasn't been measured yet.
+4. Review it: watch the video, edit the title/description/tags, and look at the **Cuts** list. Untick
+   any cut you want to keep and click **Re-render with changes** (Claude isn't asked again, so this is
+   free). **Re-plan from scratch** asks Claude for a fresh edit.
+5. **Approve & schedule on YouTube**. Long-form videos never auto-post; they always wait for you.
+
+You can change how a stream is split later from the same tab, until one of its videos is scheduled.
+From the command line: `kir longform list`, `kir longform whole <stream id>` (build the whole stream as one
+video), `kir longform build <id>`.
+
+Disk space: a 2-hour 1080p edit is a few GB, and rendering needs about the same again temporarily.
+Upload-Post's limits on long YouTube uploads (file size, length) should be checked on your plan before
+relying on it; the upload of a multi-GB file can take a while on home internet.
+
+---
+
 ## 6. Tuning with real results
 
 Upload-Post's analytics access varies by plan, so performance import is a CSV for now:
@@ -211,6 +263,7 @@ All from the repo folder (`.venv\Scripts\kir ...`, or `python -m kir_clipper ...
 | `kir reedit [--interval-days N]` | Run the re-edit job now |
 | `kir summary [--send]` | Print (and optionally send) the daily summary |
 | `kir perf-import <csv>` / `kir perf-report` | Performance data |
+| `kir longform list \| whole <stream> \| build <id>` | Long-form YouTube edits |
 
 ---
 
@@ -225,6 +278,7 @@ Streams\kir-data\
     kir_clipper.db      <- SQLite: streams, clips, posts, performance, activity log
     transcripts\        <- cached transcripts (re-runs are free)
     clips\stream_0001\  <- rendered clips + a .recipe.json describing each edit
+    longform\stream_0001\ <- full-length YouTube edits
     logs\kir_clipper.log
     notifications.log   <- every summary and alert, even without a webhook
 ```
@@ -273,6 +327,7 @@ kir_clipper/
   scheduler.py    slot planning, caps, spacing, submit/poll/retry/alert
   publishers/     Publisher interface, Upload-Post adapter, dry-run adapter
   reedit.py       90-day lineage selection, recipe variation, copy rewrite
+  longform.py     segments, Claude edit plan, frame-exact long-form render, review edits
   performance.py  CSV import and score-vs-views report
   web/            FastAPI + single-page dashboard (localhost only)
 ```

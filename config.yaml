@@ -111,3 +111,34 @@ logging:
 
 daily:
   hour: 9                     # local hour for the daily summary and the re-edit job
+
+longform:
+  enabled: true
+  wait_for_segments: true      # stream waits in the dashboard until you confirm or split it into segments
+  suggest_split_gap_minutes: 3 # a silence this long is pre-filled as a suggested split point
+  platforms: [youtube]
+  width: 1920
+  height: 1080
+  fps: 30
+  window_minutes: 20           # transcript analysed in windows of this length
+  # What may be cut. The edit stays mostly intact; only these moments are removed.
+  cut_categories:
+    - distracted        # you're clearly not engaged: looking at something else, side conversation
+    - interrupted       # cut off by something (door, phone, someone walking in), restarting a thought
+    - chat_reading      # reading chat names / comments / shout-outs aloud (substantive answers are kept)
+    - tech_issue        # audio/video problems, "can you hear me", fixing OBS
+    - away              # AFK / break
+    - housekeeping      # "starting soon", stream setup, ad reads
+  min_cut_confidence: 70
+  max_cut_ratio: 0.25           # never cut more than 25% of a segment
+  tighten_pauses_over: 3.0      # pauses longer than this (seconds) are shortened...
+  keep_pause: 0.8               # ...to this long
+  chapter_min_minutes: 4
+  popup_min_gap_seconds: 90
+  lower_third_min_gap_minutes: 6
+  zoom_min_gap_seconds: 25
+  zoom_amount: 0.12
+  subscribe_reminder: true      # "Subscribe" pop-up about a third of the way in
+  watermark: true
+  intro_seconds: 4              # generated intro, unless brand/intro.mp4 exists
+  outro_seconds: 8              # generated outro, unless brand/outro.mp4 exists

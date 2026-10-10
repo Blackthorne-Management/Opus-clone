@@ -71,7 +71,7 @@ def process_file(cfg: Config, conn, path: Path, llm=None, transcriber=None, clai
         stream_id = existing["id"]
         db.update_stream(conn, stream_id, file_path=str(claimed), status="processing", error=None)
         # Clear leftovers from an interrupted run (never touches clips that were approved or posted).
-        conn.execute("""DELETE FROM clips WHERE stream_id=? AND status IN ('pending','failed','dropped','review','dry_run')
+        conn.execute("""DELETE FROM clips WHERE stream_id=? AND kind='short' AND status IN ('pending','failed','dropped','review','dry_run')
                         AND id NOT IN (SELECT clip_id FROM posts)""", (stream_id,))
     else:
         stream_id = db.insert_stream(conn, claimed, file_hash)
@@ -98,6 +98,11 @@ def process_file(cfg: Config, conn, path: Path, llm=None, transcriber=None, clai
             llm = ClaudeJSON(cfg)
         clips = find_highlights(cfg, transcript, llm)
         created = create_clips(cfg, conn, stream_id, source, clips, transcript["words"], info)
+        try:
+            from .longform import prepare_segments
+            prepare_segments(cfg, conn, stream_id, transcript, info["duration"])
+        except Exception:
+            log.exception("Could not prepare the long-form edit for stream %s", stream_id)
 
         db.update_stream(conn, stream_id, status="done", processed_at=db.iso(db.utcnow()))
         db.log_event(conn, "stream_done", stream_id, created)
@@ -159,6 +164,8 @@ def approve_clip(cfg: Config, conn, clip_id: int, platforms: list[str] | None = 
     clip = db.get_clip(conn, clip_id)
     if clip is None or not clip["file_path"]:
         raise ValueError(f"Clip {clip_id} has no rendered file")
+    if platforms is None and clip["kind"] == "longform":
+        platforms = list(cfg.get("longform.platforms") or ["youtube"])
     db.update_clip(conn, clip_id, status="approved")
     db.log_event(conn, "clip_approved", clip_id)
     plan_posts(conn, cfg, clip_id, platforms=platforms)

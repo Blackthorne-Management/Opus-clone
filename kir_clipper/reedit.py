@@ -89,7 +89,7 @@ def find_candidates(conn, cfg: Config, now: datetime | None = None) -> list[dict
     interval = timedelta(days=float(cfg.get("reedit.interval_days", 90)))
     roots = conn.execute(
         """SELECT DISTINCT COALESCE(c.parent_clip_id, c.id) AS root FROM clips c
-           JOIN posts p ON p.clip_id = c.id WHERE p.status='posted'""").fetchall()
+           JOIN posts p ON p.clip_id = c.id WHERE p.status='posted' AND c.kind='short'""").fetchall()
     first_run = {r["root"]: _lineage_views(conn, r["root"], first_only=True) for r in roots}
     known = [v for v in first_run.values() if v is not None]
     median = statistics.median(known) if len(known) >= 5 else None

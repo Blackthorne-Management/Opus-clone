@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS clips (
     id INTEGER PRIMARY KEY,
     stream_id INTEGER NOT NULL REFERENCES streams(id),
     parent_clip_id INTEGER REFERENCES clips(id),  -- set on 90-day re-edits
+    kind TEXT NOT NULL DEFAULT 'short',           -- short | longform
     version INTEGER NOT NULL DEFAULT 1,
     start REAL NOT NULL,
     "end" REAL NOT NULL,
@@ -64,6 +65,22 @@ CREATE TABLE IF NOT EXISTS performance (
     views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER,
     watch_time REAL,
     fetched_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS longform (
+    id INTEGER PRIMARY KEY,
+    stream_id INTEGER NOT NULL REFERENCES streams(id),
+    idx INTEGER NOT NULL,             -- segment number within the stream (1, 2, ...)
+    title TEXT,
+    start REAL NOT NULL,
+    "end" REAL NOT NULL,
+    status TEXT NOT NULL,             -- needs_segments | queued | planning | rendering | ready | failed
+    replan INTEGER NOT NULL DEFAULT 1,
+    plan_json TEXT,
+    clip_id INTEGER REFERENCES clips(id),  -- the rendered video, posted through the normal queue
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -109,8 +126,16 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    _migrate(conn)
     conn.executescript(SCHEMA)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring databases created by older versions up to date."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
+    if cols and "kind" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN kind TEXT NOT NULL DEFAULT 'short'")
 
 
 def log_event(conn: sqlite3.Connection, kind: str, ref: Any = None, detail: Any = None) -> None:
@@ -143,14 +168,14 @@ def update_stream(conn, stream_id: int, **fields) -> None:
 # ---- clips -----------------------------------------------------------------
 
 def insert_clip(conn, stream_id: int, clip: dict, status: str, recipe: dict | None = None,
-                parent_clip_id: int | None = None, version: int = 1) -> int:
+                parent_clip_id: int | None = None, version: int = 1, kind: str = "short") -> int:
     now = iso(utcnow())
     cur = conn.execute(
-        """INSERT INTO clips(stream_id, parent_clip_id, version, start, "end", score, hook, reason, title,
+        """INSERT INTO clips(stream_id, parent_clip_id, version, kind, start, "end", score, hook, reason, title,
                caption, hashtags, platform_captions, recipe_json, status, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            stream_id, parent_clip_id, version, clip["start"], clip["end"], int(clip["score"]),
+            stream_id, parent_clip_id, version, kind, clip["start"], clip["end"], int(clip["score"]),
             clip.get("hook"), clip.get("reason"), clip.get("title"), clip.get("caption"),
             json.dumps(clip.get("hashtags") or []), json.dumps(clip.get("platform_captions") or {}),
             json.dumps(recipe) if recipe else None, status, now, now,
@@ -179,10 +204,20 @@ def clip_dict(row) -> dict:
     return d
 
 
-def clips_with_status(conn, statuses: Iterable[str]):
+def clips_with_status(conn, statuses: Iterable[str], kind: str = "short"):
     statuses = list(statuses)
     marks = ",".join("?" * len(statuses))
-    return conn.execute(f"SELECT * FROM clips WHERE status IN ({marks}) ORDER BY score DESC, id", statuses).fetchall()
+    return conn.execute(f"SELECT * FROM clips WHERE kind=? AND status IN ({marks}) ORDER BY score DESC, id",
+                        (kind, *statuses)).fetchall()
+
+
+# ---- long-form ---------------------------------------------------------------
+
+def update_longform(conn, lf_id: int, **fields) -> None:
+    if "plan_json" in fields and not isinstance(fields["plan_json"], (str, type(None))):
+        fields["plan_json"] = json.dumps(fields["plan_json"])
+    fields["updated_at"] = iso(utcnow())
+    _update(conn, "longform", lf_id, fields)
 
 
 # ---- posts -----------------------------------------------------------------

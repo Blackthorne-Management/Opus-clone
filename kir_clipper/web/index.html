@@ -53,7 +53,7 @@
 <script>
 const TABS = [
   ["review", "Needs review"], ["dry_run", "Would auto-post"], ["approved,scheduled", "Scheduled"],
-  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["posts", "Post calendar"],
+  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["longform", "Long-form"], ["posts", "Post calendar"],
   ["stats", "Stats"], ["events", "Activity log"],
 ];
 let current = location.hash.slice(1) || "review";
@@ -69,7 +69,7 @@ async function api(path, body) {
 }
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => {
-    const n = k.includes("posts")||k==="stats"||k==="events" ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
+    const n = k.includes("posts")||k==="stats"||k==="events"||k==="longform" ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
     return `<button class="${k===current?"on":""}" data-k="${k}">${l}${n!==""?` (${n})`:""}</button>`;
   }).join("");
   $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { current = b.dataset.k; location.hash = current; load(); });
@@ -141,6 +141,7 @@ function wire() {
 async function load() {
   summary = await api("/api/summary"); renderTabs();
   const v = $("#view");
+  if (current === "longform") { await renderLongform(v); return; }
   if (current === "stats") {
     const h = summary.histogram, max = Math.max(1, ...h);
     v.innerHTML = `<h3>Score distribution (original clips)</h3>
@@ -168,6 +169,111 @@ async function load() {
   const clips = await api(`/api/clips?status=${current}`);
   v.innerHTML = clips.length ? `<div class="grid">${clips.map(clipCard).join("")}</div>` : `<div class="empty">Nothing here.</div>`;
   wire();
+}
+
+// ---------------------------------------------------------------- long-form
+const hms = s => { s = Math.max(0, Math.round(s)); return `${Math.floor(s/3600)}:${String(Math.floor(s%3600/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; };
+const secs = t => t.trim().split(":").reduce((a, x) => a * 60 + Number(x), 0);
+const WORKING = ["queued", "planning", "rendering"];
+let lfTimer = null;
+function segEditor(g) {
+  const rows = g.segments.map(s => ({title: s.title, start: s.start, end: s.end}));
+  return `<div class="card" style="display:block" data-stream="${g.stream.id}" data-dur="${g.stream.duration}">
+    <b>Split this stream into videos</b>
+    <p class="muted">Each row becomes its own YouTube video. Times are h:mm:ss from the start of the recording
+      (${hms(g.stream.duration)} long). Suggested splits come from long silences.</p>
+    <div class="segrows">${rows.map(segRow).join("")}</div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn plain" data-a="addseg">+ Split last segment in two</button>
+      <button class="btn approve" data-a="saveseg">Build long-form video(s)</button>
+    </div></div>`;
+}
+const segRow = r => `<div class="row segrow"><label>Title<input data-k="title" value="${esc(r.title)}"></label>
+  <label>Start<input data-k="start" value="${hms(r.start)}"></label><label>End<input data-k="end" value="${hms(r.end)}"></label>
+  <button class="btn plain" data-a="rmseg" style="flex:0 0 auto;align-self:end">Remove</button></div>`;
+function lfCard(s) {
+  const clip = s.clip, r = s.render, m = s.meta || {};
+  const head = `<div class="row" style="align-items:baseline"><b>Part ${s.idx}: ${esc(s.title||"")}</b>
+    <span class="muted">${hms(s.start)}-${hms(s.end)} · ${clip ? clip.status : s.status}</span></div>`;
+  if (WORKING.includes(s.status))
+    return `<div class="card" style="display:block">${head}<p>${s.status === "queued" ? "Waiting to start..." : s.status === "planning" ? "Claude is reading the stream and planning the edit..." : "Rendering (long streams take a while)..."}</p></div>`;
+  if (s.status === "failed")
+    return `<div class="card" style="display:block" data-lf="${s.id}">${head}<p class="s-lo">${esc(s.error)}</p>
+      <button class="btn plain" data-a="lfreplan">Try again</button></div>`;
+  if (!clip) return "";
+  const locked = ["approved","scheduled","posted"].includes(clip.status);
+  const cuts = s.cuts.map((c, i) => `<label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)">
+      <input type="checkbox" data-cut="${i}" ${c.enabled?"checked":""} ${locked?"disabled":""} style="width:auto">
+      <span><b>${hms(c.start)}</b> (${Math.round(c.end-c.start)}s) ${c.category.replace("_"," ")} · ${c.confidence}%<br><span class="muted">${esc(c.reason)}</span></span></label>`).join("");
+  const pops = s.popups.map((p, i) => `<label style="display:flex;gap:8px;color:var(--ink)"><input type="checkbox" data-pop="${i}" ${p.enabled!==false?"checked":""} ${locked?"disabled":""} style="width:auto"> ${hms(p.t)} "${esc(p.text)}"</label>`).join("");
+  return `<div class="card" data-lf="${s.id}" data-clip="${clip.id}" style="display:block">${head}
+    <video src="/media/clip/${clip.id}?v=${encodeURIComponent(clip.updated_at)}" controls preload="metadata" style="width:100%;max-width:720px;aspect-ratio:16/9;height:auto"></video>
+    ${r ? `<p class="muted">${hms(r.duration)} long · ${(r.removed_seconds/60).toFixed(1)} min removed from ${hms(r.source_seconds)} of stream · ${r.chapters.length} chapters</p>` : ""}
+    <label>YouTube title<input data-f="title" value="${esc(m.title)}" ${locked?"disabled":""}></label>
+    <label>Description (chapters are added automatically)<textarea data-f="description" style="min-height:110px" ${locked?"disabled":""}>${esc(m.description)}</textarea></label>
+    <label>Tags<input data-f="tags" value="${esc((m.tags||[]).join(", "))}" ${locked?"disabled":""}></label>
+    ${r ? `<details><summary>Chapters</summary><pre>${esc(r.chapters.map(c => hms(c.t)+" "+c.title).join("\n"))}</pre></details>` : ""}
+    <details ${s.cuts.length?"open":""}><summary>Cuts (${s.cuts.filter(c=>c.enabled).length} of ${s.cuts.length} applied; untick to keep that part)</summary>${cuts || '<p class="muted">No cuts suggested.</p>'}</details>
+    <details><summary>Pop-ups (${s.popups.length})</summary>${pops || '<p class="muted">None.</p>'}</details>
+    <div class="row" style="margin-top:8px">
+      ${locked ? "" : `<button class="btn approve" data-a="lfapprove">Approve &amp; schedule on YouTube</button>
+      <button class="btn plain" data-a="lfsave">Save text</button>
+      <button class="btn plain" data-a="lfrender">Re-render with changes</button>
+      <button class="btn plain" data-a="lfreplan">Re-plan from scratch</button>
+      <button class="btn reject" data-a="lfreject">Reject</button>`}
+    </div></div>`;
+}
+function lfChanges(card) {
+  const body = {title: $("[data-f=title]", card).value, description: $("[data-f=description]", card).value,
+    tags: $("[data-f=tags]", card).value.split(",").map(t => t.trim()).filter(Boolean), cuts_enabled: {}, popups_enabled: {}};
+  card.querySelectorAll("[data-cut]").forEach(el => body.cuts_enabled[el.dataset.cut] = el.checked);
+  card.querySelectorAll("[data-pop]").forEach(el => body.popups_enabled[el.dataset.pop] = el.checked);
+  return body;
+}
+async function renderLongform(v) {
+  const groups = await api("/api/longform");
+  clearTimeout(lfTimer);
+  if (!groups.length) { v.innerHTML = `<div class="empty">No streams yet. After a stream is processed it appears here to split and build.</div>`; return; }
+  v.innerHTML = groups.map(g => {
+    const needs = g.segments.some(s => s.status === "needs_segments");
+    const changeable = !g.segments.some(s => s.clip && ["approved","scheduled","posted"].includes(s.clip.status));
+    return `<h3>${esc(g.stream.name)} <span class="muted">stream ${g.stream.id} · ${hms(g.stream.duration)}</span></h3>
+      ${needs ? segEditor(g) : `<div style="display:flex;flex-direction:column;gap:12px">${g.segments.map(lfCard).join("")}</div>
+      ${changeable ? `<details style="margin-top:8px"><summary>Change how this stream is split</summary>${segEditor(g)}</details>` : ""}`}`;
+  }).join("");
+  // segment editors
+  v.querySelectorAll("[data-stream]").forEach(ed => {
+    const rows = $(".segrows", ed);
+    ed.querySelectorAll("[data-a=rmseg]").forEach(b => b.onclick = () => { if (rows.children.length > 1) b.closest(".segrow").remove(); });
+    $("[data-a=addseg]", ed).onclick = () => {
+      const last = rows.lastElementChild, st = secs($("[data-k=start]", last).value), en = secs($("[data-k=end]", last).value), mid = (st + en) / 2;
+      $("[data-k=end]", last).value = hms(mid);
+      rows.insertAdjacentHTML("beforeend", segRow({title: `Part ${rows.children.length + 1}`, start: mid, end: en}));
+      const added = rows.lastElementChild; $("[data-a=rmseg]", added).onclick = () => added.remove();
+    };
+    $("[data-a=saveseg]", ed).onclick = async () => {
+      const segments = [...rows.querySelectorAll(".segrow")].map(r => ({title: $("[data-k=title]", r).value,
+        start: secs($("[data-k=start]", r).value), end: secs($("[data-k=end]", r).value)}));
+      await api(`/api/streams/${ed.dataset.stream}/segments`, {segments}); load();
+    };
+  });
+  // review cards
+  v.querySelectorAll("[data-lf]").forEach(card => {
+    const id = card.dataset.lf, clip = card.dataset.clip;
+    card.querySelectorAll("button[data-a]").forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const a = b.dataset.a;
+        if (a === "lfsave") await api(`/api/longform/${id}/edit`, lfChanges(card));
+        if (a === "lfrender") await api(`/api/longform/${id}/edit`, {...lfChanges(card), rerender: true});
+        if (a === "lfreplan") { if (!confirm("Ask Claude to plan this edit again from scratch?")) return; await api(`/api/longform/${id}/edit`, {rerender: true, replan: true}); }
+        if (a === "lfapprove") { await api(`/api/longform/${id}/edit`, lfChanges(card)); await api(`/api/clips/${clip}/approve`, {}); }
+        if (a === "lfreject") await api(`/api/clips/${clip}/reject`, {note: prompt("Why? (optional)") || null});
+        load();
+      } finally { b.disabled = false; }
+    });
+  });
+  if (groups.some(g => g.segments.some(s => WORKING.includes(s.status)))) lfTimer = setTimeout(() => current === "longform" && load(), 15000);
 }
 load();
 </script>

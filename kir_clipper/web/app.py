@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
 from .. import db
+from ..longform import apply_edits, set_segments
 from ..config import Config
 from ..performance import score_report
 from ..pipeline import approve_clip, edit_clip, reject_clip
@@ -31,8 +33,8 @@ def create_app(cfg: Config) -> FastAPI:
     @app.get("/api/summary")
     def summary():
         c = conn()
-        counts = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM clips GROUP BY status")}
-        scores = [r["score"] for r in c.execute("SELECT score FROM clips WHERE parent_clip_id IS NULL")]
+        counts = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM clips WHERE kind='short' GROUP BY status")}
+        scores = [r["score"] for r in c.execute("SELECT score FROM clips WHERE parent_clip_id IS NULL AND kind='short'")]
         posts = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM posts GROUP BY status")}
         streams = [dict(r) for r in c.execute(
             "SELECT id, original_path, duration, status, error, processed_at FROM streams ORDER BY id DESC LIMIT 10")]
@@ -122,6 +124,46 @@ def create_app(cfg: Config) -> FastAPI:
         db.update_post(c, post_id, status="cancelled")
         db.log_event(c, "post_cancelled", post_id)
         return {"ok": True}
+
+    @app.get("/api/longform")
+    def longform_list():
+        c = conn()
+        out = []
+        for st in c.execute("""SELECT DISTINCT s.id, s.original_path, s.duration FROM streams s
+                               JOIN longform l ON l.stream_id = s.id ORDER BY s.id DESC LIMIT 20"""):
+            segs = []
+            for r in c.execute("SELECT * FROM longform WHERE stream_id=? ORDER BY idx", (st["id"],)):
+                d = dict(r)
+                plan = json.loads(d.pop("plan_json") or "null") or {}
+                d["cuts"] = plan.get("cuts", [])
+                d["popups"] = plan.get("popups", [])
+                d["meta"] = plan.get("meta", {})
+                d["render"] = plan.get("render")
+                d["clip"] = dict(db.get_clip(c, r["clip_id"])) if r["clip_id"] else None
+                segs.append(d)
+            out.append({"stream": {"id": st["id"], "name": Path(st["original_path"]).name, "duration": st["duration"]},
+                        "segments": segs})
+        return out
+
+    @app.post("/api/streams/{stream_id}/segments")
+    def longform_segments(stream_id: int, body: dict = Body(...)):
+        c = conn()
+        st = c.execute("SELECT duration FROM streams WHERE id=?", (stream_id,)).fetchone()
+        if not st:
+            raise HTTPException(404)
+        try:
+            ids = set_segments(c, stream_id, body.get("segments") or [], st["duration"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "ids": ids}
+
+    @app.post("/api/longform/{lf_id}/edit")
+    def longform_edit(lf_id: int, body: dict = Body(...)):
+        try:
+            queued = apply_edits(cfg, conn(), lf_id, body)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "rerender": queued}
 
     @app.get("/api/events")
     def events(limit: int = 100):

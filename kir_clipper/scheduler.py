@@ -84,9 +84,9 @@ def copy_for(clip: dict, platform: str) -> tuple[str, str]:
     title = (pc.get("title") or clip.get("title") or clip.get("hook") or "").strip()
     caption = (pc.get("caption") or clip.get("caption") or title).strip()
     tags = [t if t.startswith("#") else f"#{t}" for t in (clip.get("hashtags") or [])]
-    if platform in ("tiktok", "instagram") and tags and "#" not in caption:
+    if platform in ("tiktok", "instagram") and tags and "#" not in caption and clip.get("kind", "short") == "short":
         caption = f"{caption}\n\n{' '.join(tags)}"
-    if platform == "youtube" and "#shorts" not in caption.lower():
+    if platform == "youtube" and clip.get("kind", "short") == "short" and "#shorts" not in caption.lower():
         caption = f"{caption} #shorts"
     if platform == "x":
         caption = caption[:270]

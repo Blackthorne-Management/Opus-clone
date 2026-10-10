@@ -39,6 +39,20 @@ class FakeLLM:
 
     def __call__(self, system, user, schema, max_tokens=16000):
         self.calls.append(schema)
+        props = schema.get("properties", {})
+        if "cuts" in props:  # long-form plan for one transcript window
+            idx = [int(m) for m in re.findall(r"^\[(\d+) ", user, re.M)]
+            a = idx[0]
+            return {"cuts": [{"start_idx": a + 2, "end_idx": a + 3, "category": "chat_reading", "confidence": 90,
+                              "reason": "reading names"},
+                             {"start_idx": a + 5, "end_idx": a + 5, "category": "distracted", "confidence": 40,
+                              "reason": "unsure"}],
+                    "chapters": [{"idx": a, "title": f"Topic {a}"}, {"idx": idx[len(idx) // 2], "title": "Second topic"}],
+                    "lower_thirds": [{"idx": a + 1, "title": "Discipline", "subtitle": "Why motivation fades"}],
+                    "popups": [{"idx": a + 4, "text": "Motivation is a feeling, discipline is a decision today"}],
+                    "zooms": [{"idx": a + 6}]}
+        if set(props) == {"title", "description", "tags"}:
+            return {"title": "Full stream: discipline", "description": "We talk discipline.", "tags": ["#kir", "mindset"]}
         if schema is CANDIDATE_SCHEMA:
             idx = [int(m) for m in re.findall(r"^\[(\d+) ", user, re.M)]
             clips = []
