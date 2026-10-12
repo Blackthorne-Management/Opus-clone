@@ -126,7 +126,10 @@ def find_candidates(conn, cfg: Config, now: datetime | None = None) -> list[dict
     return out
 
 
-def rewrite_copy(llm, cfg: Config, text: str, previous: list[dict]) -> dict:
+def rewrite_copy(llm, cfg: Config, text: str, previous: list[dict], ab_result: dict | None = None) -> dict:
+    ab_line = (f'\nIn an A/B test of this clip, the hook "{ab_result["winner"]}" ({ab_result["views_winner"]:,} views) beat '
+               f'"{ab_result["loser"]}" ({ab_result["views_loser"]:,} views). Keep the winning angle, in fresh words.\n'
+               if ab_result else "")
     prior = "\n".join(f"- hook: {p.get('hook')!r} | overlay: {p.get('hook_overlay')!r} | title: {p.get('title')!r}"
                       for p in previous)
     system = (f"You write short-form video copy for {cfg.get('brand.name')}. This clip already ran before; "
@@ -138,7 +141,7 @@ def rewrite_copy(llm, cfg: Config, text: str, previous: list[dict]) -> dict:
 
 Earlier versions used:
 {prior}
-
+{ab_line}
 Write new copy. Keep start_idx=0 and end_idx=0 (boundaries are not changing) and give your honest 0-99 score
 for the clip itself. hook_overlay is at most 7 words of on-screen text for the first 2 seconds; take a
 different angle from the earlier ones (a question instead of a statement, a number, a bold claim, etc.).
@@ -191,7 +194,8 @@ def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
     previous_recipes = [c["recipe"] for c in lineage if c.get("recipe")]
     previous_copy = [{"hook": c["hook"], "hook_overlay": (c.get("recipe") or {}).get("hook_text"), "title": c["title"]}
                      for c in lineage]
-    copy = rewrite_copy(llm, cfg, text, previous_copy)
+    from .hooktests import winning_hook
+    copy = rewrite_copy(llm, cfg, text, previous_copy, winning_hook(conn, root["id"]))
     base = default_recipe(cfg, root)
     recipe = vary_recipe(previous_recipes, base, rng)
     recipe["hook_text"] = copy.get("hook_overlay") or copy.get("hook") or ""

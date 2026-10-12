@@ -36,9 +36,11 @@ class FakeLLM:
     def __init__(self, scores=(95, 80, 70, 50)):
         self.scores = list(scores)
         self.calls = []
+        self.prompts = []
 
     def __call__(self, system, user, schema, max_tokens=16000):
         self.calls.append(schema)
+        self.prompts.append((system, user))
         props = schema.get("properties", {})
         if "cuts" in props:  # long-form plan for one transcript window
             idx = [int(m) for m in re.findall(r"^\[(\d+) ", user, re.M)]
@@ -70,7 +72,7 @@ class FakeLLM:
         a, b, score = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 75)
         n = len(self.calls)
         copy = {"title": f"title {n}", "caption": f"caption {n}"}
-        return {"start_idx": a, "end_idx": b, "score": score, "hook": f"new hook {n}", "hook_overlay": f"overlay {n}",
+        return {"start_idx": a, "end_idx": b, "score": score, "hook": f"new hook {n}", "hook_overlay": f"overlay {n}", "hook_overlay_alt": f"alt overlay {n}",
                 "reason": "test", "title": f"title {n}", "caption": f"caption {n}", "hashtags": ["#kir", "#mindset"],
                 "tiktok": copy, "instagram": copy, "youtube": copy, "facebook": copy, "x": copy}
 

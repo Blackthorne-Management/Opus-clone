@@ -205,3 +205,12 @@ optimize:
   min_posts_per_hour: 3       # an hour needs this many posts before it's trusted
   explore: true               # keep one slot testing a new hour next to the best one
   auto_apply: false           # true = apply better times automatically every Monday
+
+# A/B test the on-screen hook: the Trial Reel uses hook A, the Mirrored Trial Reel hook B.
+# Both go to non-followers, so after a few days the one with more views wins. Winners steer the
+# +90/+180 reposts and are shown to Claude as examples when it writes new hooks.
+ab_hooks:
+  enabled: true
+  decide_after_days: 3
+  min_difference: 0.15        # B must beat A (or vice versa) by 15%+ to count as a win, else a tie
+  lessons: 8                  # how many recent results to show Claude

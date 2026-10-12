@@ -101,14 +101,20 @@ def plan_clip(cfg: Config, conn, clip_id: int, now: datetime | None = None) -> l
     ids: list[int] = []
     anchor: datetime | None = None        # time of the first post: "day 0"
     last_same_day: datetime | None = None
+    recipe = clip.get("recipe") or {}
+    hook_a, hook_b = (recipe.get("hook_text") or "").strip(), (recipe.get("hook_text_alt") or "").strip()
+    ab = bool(cfg.get("ab_hooks.enabled", True)) and hook_b and hook_b.lower() != hook_a.lower()
+    made_by_step: dict[str, list[tuple[int, datetime]]] = {}
     for step in cfg.get("cadence.steps") or [{"name": "feed", "day": 0}]:
         name, day, trial = step["name"], int(step.get("day", 0)), bool(step.get("trial"))
         if trial and mode == "skip":
             continue
         file_path = None
         if step.get("mirror"):
+            # A/B test: the mirrored trial reel carries the alternative hook.
+            changes = {"mirror": True, **({"hook_text": hook_b} if ab else {})}
             try:
-                file_path = str(render_variant(cfg, conn, clip, {"mirror": True}, "mirror"))
+                file_path = str(render_variant(cfg, conn, clip, changes, "mirror"))
             except Exception as exc:
                 log.exception("Mirrored render failed for clip %s", clip_id)
                 notify(cfg, f"Couldn't render the mirrored version of clip {clip_id}", str(exc)[:500], level="alert")
@@ -120,12 +126,16 @@ def plan_clip(cfg: Config, conn, clip_id: int, now: datetime | None = None) -> l
         platforms = [p for p in (step.get("platforms") or cfg.get("publishing.platforms") or [])
                      if (name, p) not in existing]
         made = schedule_step(cfg, conn, clip_id, name, platforms, now, not_before, trial, file_path)
+        made_by_step[name] = made
         ids += [i for i, _ in made]
         times = [t for _, t in made]
         if times:
             anchor = anchor or min(times)
             if day == 0:
                 last_same_day = max(times)
+    if ab and made_by_step.get("trial") and made_by_step.get("mirrored_trial"):
+        from .hooktests import create
+        create(conn, clip_id, made_by_step["trial"][0][0], made_by_step["mirrored_trial"][0][0], hook_a, hook_b)
     db.log_event(conn, "cadence_planned", clip_id, {"posts": ids})
     return ids
 

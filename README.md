@@ -239,12 +239,12 @@ Every clip card in **Scheduled / Posted** shows its **Posting plan** with each s
 countdown ("in 1d 6h"), including the projected dates for steps 4 and 5. The **Post calendar** lists every
 upcoming post with its step and countdown.
 
-**Trial Reels are posted by hand for now.** Instagram's API supports trial reels, but Upload-Post's
-field name for it couldn't be confirmed. So by default (`cadence.trial_mode: manual`), when a trial reel
-is due you get a notification and a banner in the dashboard. Click **Download**, post it in the
-Instagram app as a Trial Reel, then click **Mark posted**. If Upload-Post confirms how to send trial
-reels, put their field names in `cadence.trial_api_fields`, set `trial_mode: api`, and it becomes fully
-automatic. `trial_mode: skip` turns trial reels off.
+**Trial Reels are automatic.** They go out through Upload-Post with
+`share_mode: TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED`, so Instagram shows them to non-followers first and
+shares them with your followers if they do well. Instagram only allows trial reels on public professional
+accounts with 1,000+ followers. If Upload-Post ever rejects one, that post switches to "post by hand":
+you get a reminder, then Download it, post it in Instagram as a Trial Reel, and tap **Mark posted**.
+`cadence.trial_mode` can also be `manual` (always by hand) or `skip` (no trial reels).
 
 Change the steps under `cadence.steps` in `config.yaml` (which platforms, which day). Steps 4 and 5 come
 from the `reedit` section: `max_reposts: 2` stops after the second repost, and `style: same` reposts the
@@ -303,6 +303,38 @@ renders are large, so move old files out of `Streams\processed` now and then.
 
 ---
 
+## 5e. YouTube thumbnails, results tracking, best times, and hook tests
+
+**Thumbnails (long-form videos).** Designed from scratch, not grabbed from the video, and always in the
+same channel style so your videos look like a set: a red/blue complementary background (split, spotlight
+or versus), 1-4 huge words with a thick outline and one word in yellow, a cut-out photo of you with a
+white outline, one accent graphic (arrow, ring, $, ✓/✗, ?, rising chart), and your logo. Claude writes three
+concepts per video. In the Long-form tab, click the one you like or **Make 3 new options**.
+
+- Put cut-out photos of yourself in `brand\thumbnail\person\`, named by expression (`shocked.png`,
+  `serious.png`, `pointing.png`...). Transparent PNGs work best; on iPhone, touch and hold yourself in a
+  photo and choose Copy/Share to get one. Without photos, thumbnails are text-only.
+- Colours and font are under `thumbnails:` in `config.yaml` (Anton is bundled).
+- Preview the style any time: `kir thumbnails --title "Why discipline beats motivation"`.
+- Upload-Post can only attach a thumbnail from a public web link, so when a long-form video goes live you
+  get a reminder to upload the chosen thumbnail in YouTube Studio (Download button in the Long-form tab).
+
+**Results tracking.** Views, likes, comments, shares, saves, reach and watch time are fetched from
+Upload-Post 1, 3, 7 and 30 days after each post (they show in the Post calendar). Posts you made by hand
+get an **Add numbers** button.
+
+**Best posting times.** The Stats tab shows, per platform, how your posts did by the hour they went out,
+and once there are 20+ posts with results it suggests better times (keeping one slot testing a new hour so
+it keeps learning). Click **Use these times**, or set `optimize.auto_apply: true` to update them every
+Monday. Each platform can now have its own times.
+
+**Hook A/B tests.** Every new clip gets two on-screen hooks: the Trial Reel uses hook A and the Mirrored
+Trial Reel hook B. Both go to non-followers, so after 3 days the one with more views wins (within 15% is a
+tie). Winners are shown in Stats, the +90/+180 reposts build on the winning angle, and Claude sees your
+recent winners and losers when writing hooks for new clips.
+
+---
+
 ## 6. Tuning with real results
 
 Upload-Post's analytics access varies by plan, so performance import is a CSV for now:
@@ -345,6 +377,7 @@ All from the repo folder (`.venv\Scripts\kir ...`, or `python -m kir_clipper ...
 | `kir perf-import <csv>` / `kir perf-report` | Performance data |
 | `kir longform list \| whole <stream> \| build <id>` | Long-form YouTube edits |
 | `kir import <file> --posted "YYYY-MM-DD HH:MM" [--done feed,trial]` | Add a reel you already posted to the schedule |
+| `kir thumbnails --title "..."` | Preview the thumbnail style for a title |
 
 ---
 

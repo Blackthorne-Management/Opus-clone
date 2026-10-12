@@ -155,6 +155,7 @@ REFINE_SCHEMA = {
         "score": {"type": "integer"},
         "hook": {"type": "string"},
         "hook_overlay": {"type": "string"},
+        "hook_overlay_alt": {"type": "string"},
         "reason": {"type": "string"},
         "title": {"type": "string"},
         "caption": {"type": "string"},
@@ -165,7 +166,7 @@ REFINE_SCHEMA = {
         "facebook": PLATFORM_COPY,
         "x": PLATFORM_COPY,
     },
-    "required": ["start_idx", "end_idx", "score", "hook", "hook_overlay", "reason", "title", "caption",
+    "required": ["start_idx", "end_idx", "score", "hook", "hook_overlay", "hook_overlay_alt", "reason", "title", "caption",
                  "hashtags", "tiktok", "instagram", "youtube", "facebook", "x"],
     "additionalProperties": False,
 }
@@ -173,7 +174,14 @@ REFINE_SCHEMA = {
 PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "x")
 
 
-def system_prompt(criteria: str, cfg: Config) -> str:
+def system_prompt(criteria: str, cfg: Config, lessons: str = "") -> str:
+    lesson_block = f"""
+
+What has actually worked for this audience (A/B tests of on-screen hooks on the same clip):
+<hook_results>
+{lessons}
+</hook_results>
+Lean toward the patterns that won.""" if lessons else ""
     return f"""You are the clip editor for {cfg.get('brand.name', 'the creator')}'s livestreams.
 You read timestamped transcripts and pick moments that work as standalone vertical short-form clips
 (TikTok, Instagram Reels, YouTube Shorts).
@@ -188,7 +196,7 @@ seconds; {cfg.get('highlights.preferred_min_seconds')} to {cfg.get('highlights.p
 Scoring criteria from the creator (follow these closely):
 <criteria>
 {criteria}
-</criteria>"""
+</criteria>{lesson_block}"""
 
 
 def pass1_prompt(chunk: list[dict]) -> str:
@@ -222,6 +230,8 @@ Review it as the final edit:
    off; trim it if it trails into unrelated talk. Stay within the length rules.
 3. Re-score 0-99 honestly after the fix.
 4. hook_overlay: at most 7 words of on-screen text for the first 2 seconds (no hashtags, no emojis).
+   hook_overlay_alt: a second on-screen hook for an A/B test, at most 7 words, taking a clearly different
+   angle (e.g. a question vs a bold claim, a number vs an emotion). Both must be honest to the clip.
 5. Write a short title and a general caption, 3-6 relevant hashtags (with #), and per-platform copy:
    - tiktok: title = short punchy line; caption = 1-2 short sentences plus hashtags.
    - youtube: title = searchable Shorts title under 90 characters; caption = 1-2 sentences + #shorts.
@@ -232,14 +242,14 @@ Only use sentence indices shown above."""
 
 # --------------------------------------------------------------------------- main entry
 
-def find_highlights(cfg: Config, transcript: dict, llm) -> list[dict]:
+def find_highlights(cfg: Config, transcript: dict, llm, lessons: str = "") -> list[dict]:
     words = transcript["words"]
     if not words:
         log.warning("Transcript has no words; nothing to clip")
         return []
     sentences = build_sentences(words, transcript.get("energy"))
     criteria = Path(cfg.resolve(cfg.get("highlights.criteria_file", "virality_criteria.md"))).read_text(encoding="utf-8")
-    system = system_prompt(criteria, cfg)
+    system = system_prompt(criteria, cfg, lessons)
     h = cfg.get("highlights")
     min_s, max_s = float(h["min_seconds"]), float(h["max_seconds"])
     cap = int(h["max_clips_per_stream"])

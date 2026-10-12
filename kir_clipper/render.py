@@ -36,6 +36,7 @@ def default_recipe(cfg: Config, clip: dict) -> dict:
         "zoom_amount": float(d.get("zoom_amount", 0.10)),
         "hook_overlay": bool(d.get("hook_overlay", True)),
         "hook_text": clip.get("hook_overlay") or clip.get("hook") or "",
+        "hook_text_alt": clip.get("hook_overlay_alt") or "",
         "outro_cta": bool(d.get("outro_cta", True)),
         "cta_text": cfg.get("brand.cta_text", ""),
         "watermark": True,

@@ -395,6 +395,13 @@ def create_app(cfg: Config) -> FastAPI:
         db.log_event(conn(), "posting_times_applied", platform, sug["suggested"])
         return {"ok": True, "slots": sug["suggested"]}
 
+    @app.get("/api/hooktests")
+    def hooktests_get():
+        from ..hooktests import evaluate, summary as ab_summary
+        c = conn()
+        evaluate(c, cfg)
+        return ab_summary(c)
+
     @app.get("/api/settings")
     def get_settings():
         from ..maintenance import dashboard_url

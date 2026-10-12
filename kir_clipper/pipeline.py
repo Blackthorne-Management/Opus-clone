@@ -97,7 +97,8 @@ def process_file(cfg: Config, conn, path: Path, llm=None, transcriber=None, clai
         if llm is None:
             from .llm import ClaudeJSON
             llm = ClaudeJSON(cfg)
-        clips = find_highlights(cfg, transcript, llm)
+        from .hooktests import lessons
+        clips = find_highlights(cfg, transcript, llm, lessons=lessons(conn, cfg))
         created = create_clips(cfg, conn, stream_id, source, clips, transcript["words"], info)
         try:
             from .longform import prepare_segments

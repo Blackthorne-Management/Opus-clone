@@ -288,6 +288,11 @@ def cmd_run(args) -> int:
                 fetch_due(mconn, cfg, get_publisher(cfg))
             except Exception:
                 log.exception("Performance fetch failed")
+            try:
+                from .hooktests import evaluate
+                evaluate(mconn, cfg)   # also covers numbers entered by hand
+            except Exception:
+                log.exception("Hook test evaluation failed")
 
     threading.Thread(target=metrics_loop, name="metrics", daemon=True).start()
 

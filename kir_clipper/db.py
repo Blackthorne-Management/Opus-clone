@@ -91,6 +91,19 @@ CREATE TABLE IF NOT EXISTS longform (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS hook_tests (
+    id INTEGER PRIMARY KEY,
+    clip_id INTEGER NOT NULL REFERENCES clips(id),
+    post_a INTEGER NOT NULL REFERENCES posts(id),   -- trial reel, hook A
+    post_b INTEGER NOT NULL REFERENCES posts(id),   -- mirrored trial reel, hook B
+    hook_a TEXT NOT NULL,
+    hook_b TEXT NOT NULL,
+    views_a INTEGER, views_b INTEGER,
+    winner TEXT,                                    -- a | b | tie (NULL until decided)
+    decided_at TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS heartbeats (
     name TEXT PRIMARY KEY,            -- watcher | publisher | longform
     at TEXT NOT NULL,
