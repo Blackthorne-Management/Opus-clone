@@ -90,7 +90,10 @@ function modal(html, buttons) {
     const bg = document.createElement("div"); bg.className = "modal-bg";
     bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}<div class="row">${buttons.map((b, i) =>
       `<button class="btn ${b.kind || "plain"}" data-i="${i}">${esc(b.label)}</button>`).join("")}</div></div>`;
-    const done = v => { bg.remove(); resolve(v); };
+    const done = v => {
+      modal.fields = Object.fromEntries([...bg.querySelectorAll("input,select,textarea")].map(el => [el.id || el.name, el.value]));
+      bg.remove(); resolve(v);
+    };
     bg.querySelectorAll("button[data-i]").forEach(el => el.onclick = () => done(buttons[el.dataset.i].value));
     bg.onclick = e => { if (e.target === bg) done(null); };
     document.body.appendChild(bg); bg.querySelector("button").focus();
@@ -116,6 +119,19 @@ function planList(tl) {
     <td>${STEP_STATUS[s.status]||s.status}</td>
     <td>${s.status === "posted" ? when(s.at) : s.status === "post_by_hand" ? `${when(s.at)} · <b>due now</b>`
       : `${when(s.at)} · <b data-countdown="${s.at}">${countdown(s.at)}</b>`}</td></tr>`).join("")}</table></div>`;
+}
+async function addNumbers(postId) {
+  const bg = await modal(`<h3>Add this post's numbers</h3><p class="muted">For posts made by hand (Trial Reels).
+    Best around 3 days after posting. Find them under the reel's Insights in the Instagram app.</p>
+    <div class="row"><label>Views<input id="m_views" inputmode="numeric"></label><label>Likes<input id="m_likes" inputmode="numeric"></label></div>
+    <div class="row"><label>Comments<input id="m_comments" inputmode="numeric"></label><label>Shares<input id="m_shares" inputmode="numeric"></label>
+    <label>Saves<input id="m_saves" inputmode="numeric"></label></div>`,
+    [{label: "Save", value: "save", kind: "approve"}, {label: "Cancel", value: null}]);
+  if (bg !== "save") return;
+  const f = modal.fields;
+  await api(`/api/posts/${postId}/metrics`, {views: f.m_views, likes: f.m_likes, comments: f.m_comments,
+    shares: f.m_shares, saves: f.m_saves});
+  toast("Numbers saved"); load();
 }
 function renderStatus() {
   const sv = summary.service || {}, w = sv.watcher || {}, pub = sv.publisher || {}, lf = sv.longform || {};
@@ -245,10 +261,12 @@ async function load() {
       `<tr><td>${when(p.publish_at)}${["planned","submitted"].includes(p.status)?`<br><b data-countdown="${p.publish_at}">${countdown(p.publish_at)}</b>`:""}</td>
        <td>${esc(p.label)}${p.trial?' <span class="pill dry">trial</span>':""}</td><td>${p.platform}</td>
        <td>${p.clip_id} · ${esc(p.title)}${p.kind==="short"?` (${p.score})`:""}</td>
-       <td>${p.status==="manual"?"<b>post by hand now</b>":p.status}${p.last_error?`<br><span class="muted">${esc(p.last_error)}</span>`:""}</td>
+       <td>${p.status==="manual"?"<b>post by hand now</b>":p.status}${p.last_error?`<br><span class="muted">${esc(p.last_error)}</span>`:""}
+         ${p.views!=null?`<br><span class="muted">${Number(p.views).toLocaleString()} views${p.likes!=null?` · ${Number(p.likes).toLocaleString()} likes`:""}</span>`:""}</td>
        <td>${p.status==="manual"?`<a class="btn plain" href="/media/post/${p.id}" download>Download</a>
            <button class="btn approve" onclick="api('/api/posts/${p.id}/mark-posted',{}).then(() => { toast('Marked as posted'); load(); })">Mark posted</button>`:""}
-           ${["planned","manual"].includes(p.status)?`<button class="btn plain" onclick="api('/api/posts/${p.id}/cancel',{}).then(load)">Cancel</button>`:""}</td></tr>`).join("")}</table>`
+           ${["planned","manual"].includes(p.status)?`<button class="btn plain" onclick="api('/api/posts/${p.id}/cancel',{}).then(load)">Cancel</button>`:""}
+           ${p.status==="posted" && !p.request_id ? `<button class="btn plain" onclick="addNumbers(${p.id})">Add numbers</button>` : ""}</td></tr>`).join("")}</table>`
       : `<div class="empty">No posts yet.</div>`;
     return;
   }

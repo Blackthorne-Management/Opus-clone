@@ -90,6 +90,71 @@ class UploadPostPublisher:
         return parse_status(body)
 
 
+    def metrics(self, request_id: str, platform: str) -> dict | None:
+        """Per-post numbers from GET /uploadposts/post-analytics/{request_id}. None if not available yet."""
+        if not request_id or request_id.startswith(("sync:", "dry-")):
+            return None
+        try:
+            resp = self.client.get(f"{self.base}/uploadposts/post-analytics/{request_id}", headers=self._headers)
+        except httpx.HTTPError:
+            return None
+        if resp.status_code == 429:
+            raise PublishError("analytics rate limit", retryable=True)
+        if resp.status_code >= 300:
+            return None
+        return parse_metrics(_json(resp), platform)
+
+
+METRIC_KEYS = {
+    "views": ("views", "view_count", "video_views", "plays", "play_count", "video_view_count"),
+    "likes": ("likes", "like_count", "likes_count", "reactions", "favorite_count"),
+    "comments": ("comments", "comment_count", "comments_count", "replies"),
+    "shares": ("shares", "share_count", "shares_count", "reposts", "retweet_count"),
+    "saves": ("saves", "saved", "save_count", "bookmarks", "bookmark_count"),
+    "reach": ("reach", "accounts_reached", "unique_viewers"),
+    "watch_time": ("total_time_watched", "watch_time", "estimated_minutes_watched", "estimatedMinutesWatched"),
+}
+
+
+def _find_numbers(node, out: dict) -> None:
+    if isinstance(node, dict):
+        for k, v in node.items():
+            key = str(k).lower()
+            for metric, aliases in METRIC_KEYS.items():
+                if key in [a.lower() for a in aliases] and metric not in out:
+                    try:
+                        out[metric] = float(v["value"] if isinstance(v, dict) and "value" in v else v)
+                    except (TypeError, ValueError):
+                        pass
+            if isinstance(v, (dict, list)):
+                _find_numbers(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _find_numbers(v, out)
+
+
+def parse_metrics(body: dict, platform: str) -> dict | None:
+    """Pull view/like/etc. counts out of the analytics payload, preferring the block for `platform`."""
+    scope = body
+    for key in ("platforms", "results", "data", "analytics"):
+        block = body.get(key) if isinstance(body, dict) else None
+        if isinstance(block, dict) and platform in block:
+            scope = block[platform]
+            break
+        if isinstance(block, list):
+            match = [b for b in block if isinstance(b, dict) and str(b.get("platform", "")).lower() == platform]
+            if match:
+                scope = match[0]
+                break
+    found: dict = {}
+    _find_numbers(scope.get("post_metrics", scope) if isinstance(scope, dict) else scope, found)
+    if not found and scope is not body:
+        _find_numbers(scope, found)
+    if not found:
+        return None
+    return {k: (int(v) if k != "watch_time" else v) for k, v in found.items()}
+
+
 def parse_status(body: dict) -> PostStatus:
     """Normalise Upload-Post's status payload, tolerating the shapes it has used."""
     raw = str(body.get("status") or body.get("state") or "").lower()

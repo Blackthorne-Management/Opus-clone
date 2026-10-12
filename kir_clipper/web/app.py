@@ -200,9 +200,13 @@ def create_app(cfg: Config) -> FastAPI:
                         p.publish_at DESC LIMIT ?""",
             (limit,)).fetchall()
         out = []
+        c2 = conn()
         for r in rows:
             d = dict(r)
             d["label"] = step_label(d["step"], cfg) if d["kind"] == "short" else "Long-form video"
+            perf = c2.execute("SELECT views, likes FROM performance WHERE post_id=? ORDER BY fetched_at DESC LIMIT 1",
+                              (d["id"],)).fetchone()
+            d["views"], d["likes"] = (perf["views"], perf["likes"]) if perf else (None, None)
             out.append(d)
         return out
 
@@ -212,6 +216,25 @@ def create_app(cfg: Config) -> FastAPI:
             mark_posted(conn(), post_id, body.get("url"))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+        return {"ok": True}
+
+    @app.post("/api/posts/{post_id}/metrics")
+    def post_metrics(post_id: int, body: dict = Body(...)):
+        from ..performance import METRICS, record
+        vals = {}
+        for k in METRICS:
+            v = body.get(k)
+            if v not in (None, ""):
+                try:
+                    vals[k] = float(str(v).replace(",", "")) if k == "watch_time" else int(float(str(v).replace(",", "")))
+                except ValueError:
+                    raise HTTPException(400, f"{k} must be a number")
+        if not vals:
+            raise HTTPException(400, "Enter at least the views")
+        c = conn()
+        if not c.execute("SELECT 1 FROM posts WHERE id=? AND status='posted'", (post_id,)).fetchone():
+            raise HTTPException(400, "Only posted posts can have numbers")
+        record(c, post_id, source="manual", **vals)
         return {"ok": True}
 
     @app.get("/media/post/{post_id}")

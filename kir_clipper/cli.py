@@ -277,6 +277,20 @@ def cmd_run(args) -> int:
 
     threading.Thread(target=longform_loop, name="longform", daemon=True).start()
 
+    def metrics_loop():
+        from .performance import fetch_due
+        mconn = db.connect(cfg.db_path)
+        while not stop.is_set():
+            stop.wait(60 * float(cfg.get("performance.check_minutes", 15)))
+            if cfg.dry_run or not cfg.get("performance.enabled", True):
+                continue
+            try:
+                fetch_due(mconn, cfg, get_publisher(cfg))
+            except Exception:
+                log.exception("Performance fetch failed")
+
+    threading.Thread(target=metrics_loop, name="metrics", daemon=True).start()
+
     tz = ZoneInfo(cfg.get("publishing.upload_post.timezone") or "UTC")
     daily_hour = int(cfg.get("daily.hour", 9))
     try:

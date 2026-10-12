@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS performance (
     post_id INTEGER NOT NULL REFERENCES posts(id),
     views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER,
     watch_time REAL,
+    saves INTEGER,
+    reach INTEGER,
+    source TEXT,                      -- upload_post | manual | csv
+    raw TEXT,                         -- the service's response, for later analysis
     fetched_at TEXT NOT NULL
 );
 
@@ -149,6 +153,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     scols = {r["name"] for r in conn.execute("PRAGMA table_info(streams)")}
     if scols and "kind" not in scols:
         conn.execute("ALTER TABLE streams ADD COLUMN kind TEXT NOT NULL DEFAULT 'stream'")
+    fcols = {r["name"] for r in conn.execute("PRAGMA table_info(performance)")}
+    for name, ddl in (("saves", "INTEGER"), ("reach", "INTEGER"), ("source", "TEXT"), ("raw", "TEXT")):
+        if fcols and name not in fcols:
+            conn.execute(f"ALTER TABLE performance ADD COLUMN {name} {ddl}")
     pcols = {r["name"] for r in conn.execute("PRAGMA table_info(posts)")}
     for name, ddl in (("step", "TEXT"), ("trial", "INTEGER NOT NULL DEFAULT 0"), ("file_path", "TEXT")):
         if pcols and name not in pcols:

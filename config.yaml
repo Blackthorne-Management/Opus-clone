@@ -108,7 +108,8 @@ reedit:
   severe_underperform_ratio: 0.5
 
 performance:
-  enabled: false              # turn on once Upload-Post analytics access is confirmed
+  enabled: true               # fetch views/likes/etc. from Upload-Post at 1, 3, 7 and 30 days after posting
+  check_minutes: 15           # how often to look for posts that are due a snapshot
 
 logging:
   level: INFO

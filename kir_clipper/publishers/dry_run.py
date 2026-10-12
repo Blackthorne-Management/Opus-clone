@@ -24,3 +24,6 @@ class DryRunPublisher:
 
     def status(self, post_id: str) -> PostStatus:
         return PostStatus(state="posted", platform_post_id=post_id)
+
+    def metrics(self, request_id: str, platform: str) -> dict | None:
+        return None
