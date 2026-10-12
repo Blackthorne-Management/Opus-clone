@@ -10,7 +10,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-SECRET_ENV_VARS = ("ANTHROPIC_API_KEY", "UPLOAD_POST_API_KEY", "OPENAI_API_KEY", "ALERT_WEBHOOK_URL")
+SECRET_ENV_VARS = ("ANTHROPIC_API_KEY", "UPLOAD_POST_API_KEY", "OPENAI_API_KEY", "ALERT_WEBHOOK_URL",
+                   "GEMINI_API_KEY", "GOOGLE_API_KEY")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

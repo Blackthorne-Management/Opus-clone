@@ -19,7 +19,7 @@ import os
 import random
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from .config import Config
 
@@ -51,9 +51,10 @@ CONCEPT_SCHEMA = {
                     "layout": {"type": "string", "enum": list(LAYOUTS)},
                     "expression": {"type": "string"},
                     "accent": {"type": "string", "enum": list(ACCENTS)},
+                    "scene": {"type": "string"},
                     "why": {"type": "string"},
                 },
-                "required": ["text", "emphasis", "layout", "expression", "accent", "why"],
+                "required": ["text", "emphasis", "layout", "expression", "accent", "scene", "why"],
                 "additionalProperties": False,
             },
         }
@@ -297,11 +298,40 @@ def _accent(img: Image.Image, kind: str, at: tuple[int, int], th: dict, font_fil
 
 # --------------------------------------------------------------------------- compose
 
-def render(cfg: Config, concept: dict, out: Path, seed: int = 0) -> Path:
+def grade(art: Image.Image, layout: str, th: dict, seed: int) -> Image.Image:
+    """Turn any AI background into the channel look: cover-crop, red/blue colour grade, darker text side."""
+    art = art.convert("RGBA")
+    scale = max(W / art.width, H / art.height)
+    art = art.resize((int(art.width * scale) + 1, int(art.height * scale) + 1), Image.LANCZOS)
+    left, top = (art.width - W) // 2, (art.height - H) // 2
+    img = art.crop((left, top, left + W, top + H))
+    rgb = ImageEnhance.Contrast(ImageEnhance.Color(img.convert("RGB")).enhance(1.35)).enhance(1.15)
+    tint = background(layout, th, seed).convert("RGB")  # the template's own red/blue composition
+    graded = ImageChops.soft_light(rgb, tint)          # pushes the art toward the channel colours, keeps detail
+    img = Image.blend(rgb, graded, 0.7)
+    img = Image.blend(img, tint, 0.15).convert("RGBA")
+    shade = Image.new("L", (W, H), 0)
+    sd = ImageDraw.Draw(shade)
+    for x in range(int(W * 0.6)):                      # darken the left side a little where the words go
+        sd.line([(x, 0), (x, H)], fill=int(110 * (1 - x / (W * 0.6)) ** 1.4))
+    img.paste(Image.new("RGBA", (W, H), (0, 0, 0, 255)), (0, 0), shade)
+    return _vignette(img, 0.35)
+
+
+def _add_logo(cfg: Config, img: Image.Image) -> None:
+    logo_cfg = cfg.get("brand.logo")
+    logo = cfg.resolve(logo_cfg) if logo_cfg else None
+    if logo and logo.exists() and cfg.get("thumbnails.logo", True):
+        lg = Image.open(logo).convert("RGBA")
+        lg.thumbnail((120, 120))
+        img.alpha_composite(lg, (W - lg.width - 24, 20))
+
+
+def render(cfg: Config, concept: dict, out: Path, seed: int = 0, art: Image.Image | None = None) -> Path:
     th = theme(cfg)
     font_file = font_path(cfg)
     layout = concept.get("layout") if concept.get("layout") in LAYOUTS else "split"
-    img = background(layout, th, seed)
+    img = grade(art, layout, th, seed) if art is not None else background(layout, th, seed)
     person = load_person(cfg, concept.get("expression", ""))
     if person is not None:
         cut = _outlined_person(person, int(H * 0.98))
@@ -331,14 +361,91 @@ def render(cfg: Config, concept: dict, out: Path, seed: int = 0) -> Path:
     accent_at = next((c for c in candidates if clear(c)), None)
     if accent_at:
         _accent(img, concept.get("accent", "none"), accent_at, th, font_file)
-    logo_cfg = cfg.get("brand.logo")
-    logo = cfg.resolve(logo_cfg) if logo_cfg else None
-    if logo and logo.exists() and cfg.get("thumbnails.logo", True):
-        lg = Image.open(logo).convert("RGBA")
-        lg.thumbnail((120, 120))
-        img.alpha_composite(lg, (W - lg.width - 24, 20))
+    _add_logo(cfg, img)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.convert("RGB").save(out, "JPEG", quality=90, optimize=True)  # YouTube limit is 2 MB
+    return out
+
+
+# --------------------------------------------------------------------------- Gemini (AI art)
+
+def style_bible(cfg: Config) -> str:
+    th = theme(cfg)
+    return cfg.get("thumbnails.ai.style") or (
+        f"Bold, high-contrast YouTube thumbnail style for a self-improvement and business channel. "
+        f"Complementary colour scheme: deep electric blue ({th['secondary']}) on one side and vivid red "
+        f"({th['primary']}) on the other, with a {th['highlight']} yellow accent. Dramatic cinematic lighting, "
+        f"rim light, crisp focus, slight glow, punchy saturation, clean uncluttered composition with one clear "
+        f"focal point, readable at phone size.")
+
+
+def ai_background(cfg: Config, concept: dict, meta: dict, client=None) -> Image.Image:
+    from .gemini_images import generate_image
+    prompt = (f"{style_bible(cfg)}\n\nCreate ONLY the background art for a 16:9 YouTube thumbnail about: "
+              f"\"{meta.get('title', '')}\". Scene: {concept.get('scene') or concept.get('text')}.\n"
+              "Rules: no people, no faces, no text, no letters, no logos, no watermarks. Keep the left 55% of the "
+              "frame darker and simple (big words will be placed there); put the visual interest on the right.")
+    return generate_image(cfg, prompt, client=client)
+
+
+def recent_choices(cfg: Config, limit: int = 2) -> list[Path]:
+    """Thumbnails the owner picked recently: style references so new ones match the channel."""
+    from . import db
+    import json as _json
+    paths = []
+    try:
+        conn = db.connect(cfg.db_path)
+        for r in conn.execute("SELECT plan_json FROM longform WHERE plan_json LIKE '%thumbnail_choice%' "
+                              "ORDER BY updated_at DESC LIMIT 20"):
+            plan = _json.loads(r["plan_json"])
+            thumbs, choice = plan.get("thumbnails") or [], plan.get("thumbnail_choice", 0)
+            if 0 <= choice < len(thumbs) and Path(thumbs[choice]["path"]).exists():
+                paths.append(Path(thumbs[choice]["path"]))
+            if len(paths) >= limit:
+                break
+    except Exception:
+        log.debug("Couldn't read earlier thumbnails", exc_info=True)
+    return paths
+
+
+def ai_full(cfg: Config, concept: dict, meta: dict, client=None) -> Image.Image:
+    """Gemini designs the whole thumbnail, using the creator's photos and recent picks as references."""
+    from .gemini_images import generate_image
+    refs: list[Path] = []
+    d = person_dir(cfg)
+    if d.exists():
+        wanted = (concept.get("expression") or "").lower()
+        photos = sorted(p for p in d.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
+                        and not p.name.endswith(".cutout.png"))
+        photos.sort(key=lambda p: p.stem.lower() != wanted)
+        refs += photos[:2]
+    style_refs = recent_choices(cfg, int(cfg.get("thumbnails.ai.style_refs", 2)))
+    th = theme(cfg)
+    words = " ".join(concept.get("text", "").upper().split()[:4])
+    prompt = (f"{style_bible(cfg)}\n\nDesign a complete 16:9 YouTube thumbnail for the video "
+              f"\"{meta.get('title', '')}\".\n"
+              f"- Big bold condensed sans-serif text, white with a thick black outline: \"{words}\". "
+              f"Make the word \"{concept.get('emphasis', '').upper()}\" yellow ({th['highlight']}). Spell it exactly; "
+              "no other text anywhere.\n"
+              f"- Background idea: {concept.get('scene') or ''}\n"
+              + (f"- Feature the person from the first {min(2, len(refs))} reference photo(s), same face and identity, "
+                 f"chest-up, expression: {concept.get('expression') or 'intense'}, with a thin white outline, on the right "
+                 "side. Text on the left.\n" if refs else "- No people.\n")
+              + (f"- Match the look of the last {len(style_refs)} reference image(s): they are earlier thumbnails "
+                 "from this channel, keep the same style.\n" if style_refs else "")
+              + "- No logos or watermarks.")
+    return generate_image(cfg, prompt, refs=refs + style_refs, client=client)
+
+
+def finish_full(cfg: Config, art: Image.Image, out: Path) -> Path:
+    art = art.convert("RGBA")
+    scale = max(W / art.width, H / art.height)
+    art = art.resize((int(art.width * scale) + 1, int(art.height * scale) + 1), Image.LANCZOS)
+    left, top = (art.width - W) // 2, (art.height - H) // 2
+    img = art.crop((left, top, left + W, top + H))
+    _add_logo(cfg, img)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.convert("RGB").save(out, "JPEG", quality=90, optimize=True)
     return out
 
 
@@ -366,6 +473,8 @@ Write {count} different thumbnail concepts that maximise click-through while sta
 - expression: the photo whose emotion matches the text.
 - accent: one graphic that supports the idea (arrow points at the key thing, ring circles it, money for
   income/business, check_x for right-vs-wrong, question for curiosity, chart_up for growth, none if cleaner).
+- scene: one sentence describing a background image that visualises the idea, with NO people and NO text
+  (for example "a cracked hourglass on a dark desk, sand spilling out" or "a staircase rising into light").
 - why: one short sentence on why it would get clicked.
 Make the {count} concepts genuinely different angles so the owner has a real choice."""
     result = llm(system, user, CONCEPT_SCHEMA)
@@ -379,11 +488,28 @@ Make the {count} concepts genuinely different angles so the owner has a real cho
 
 
 def generate(cfg: Config, llm, meta: dict, chapters: list[str], out_dir: Path, stem: str,
-             count: int | None = None, avoid: list[str] | None = None) -> list[dict]:
+             count: int | None = None, avoid: list[str] | None = None, gemini_client=None) -> list[dict]:
     count = count or int(cfg.get("thumbnails.count", 3))
+    ai = cfg.get("thumbnails.ai") or {}
+    use_ai = bool(ai.get("enabled"))
     made = []
     for i, c in enumerate(concepts(cfg, llm, meta, chapters, count, avoid)):
-        path = render(cfg, c, out_dir / f"{stem}_thumb{i + 1}.jpg", seed=hash((stem, i)) & 0xFFFF)
-        made.append({**c, "path": str(path)})
+        out = out_dir / f"{stem}_thumb{i + 1}.jpg"
+        seed = hash((stem, i)) & 0xFFFF
+        source, error = "template", None
+        if use_ai:
+            try:
+                if ai.get("mode", "background") == "full":
+                    path = finish_full(cfg, ai_full(cfg, c, meta, client=gemini_client), out)
+                    source = "gemini-full"
+                else:
+                    path = render(cfg, c, out, seed, art=ai_background(cfg, c, meta, client=gemini_client))
+                    source = "gemini-background"
+            except Exception as exc:  # no key, quota, blocked prompt...: the template still delivers
+                error = str(exc)[:300]
+                log.warning("Gemini thumbnail failed (%s); using the template", error)
+        if source == "template":
+            path = render(cfg, c, out, seed)
+        made.append({**c, "path": str(path), "source": source, **({"ai_error": error} if error else {})})
     log.info("Generated %d thumbnails for %s", len(made), stem)
     return made

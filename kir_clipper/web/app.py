@@ -269,7 +269,8 @@ def create_app(cfg: Config) -> FastAPI:
                 d["cuts"] = plan.get("cuts", [])
                 d["popups"] = plan.get("popups", [])
                 d["meta"] = plan.get("meta", {})
-                d["thumbnails"] = [{k: t[k] for k in ("text", "why", "layout")} for t in plan.get("thumbnails", [])]
+                d["thumbnails"] = [{k: t.get(k) for k in ("text", "why", "layout", "source", "ai_error")}
+                                   for t in plan.get("thumbnails", [])]
                 d["thumbnail_choice"] = plan.get("thumbnail_choice", 0)
                 d["render"] = plan.get("render")
                 d["clip"] = dict(db.get_clip(c, r["clip_id"])) if r["clip_id"] else None

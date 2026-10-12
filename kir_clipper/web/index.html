@@ -360,7 +360,7 @@ function lfCard(s) {
       <div class="row" style="margin-top:6px">${s.thumbnails.map((t, i) => `<label style="flex:1;min-width:200px;color:var(--ink);cursor:pointer">
         <img src="/media/thumb/${s.id}/${i}?v=${encodeURIComponent(t.text)}" alt="${esc(t.text)}" style="width:100%;border-radius:6px;outline:${i===s.thumbnail_choice?"4px solid var(--ok)":"1px solid var(--line)"}">
         <span style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="radio" name="thumb${s.id}" data-thumb="${i}" ${i===s.thumbnail_choice?"checked":""} style="width:auto">
-        <span class="muted">${esc(t.why)}</span></span></label>`).join("")}</div>
+        <span class="muted">${t.source && t.source.startsWith("gemini") ? '<b style="color:var(--ok)">AI</b> · ' : ""}${esc(t.why)}${t.ai_error ? ` <span class="s-lo">(AI unavailable: ${esc(t.ai_error)})</span>` : ""}</span></span></label>`).join("")}</div>
       <div class="row" style="margin-top:6px"><a class="btn plain" href="/media/thumb/${s.id}/${s.thumbnail_choice}?download=1" download style="text-align:center">Download chosen thumbnail</a>
         <button class="btn plain" data-a="lfthumbs">Make 3 new options</button></div></div>` : ""}
     <details ${s.cuts.length?"open":""}><summary>Cuts (${s.cuts.filter(c=>c.enabled).length} of ${s.cuts.length} applied; untick to keep that part)</summary>${cuts || '<p class="muted">No cuts suggested.</p>'}</details>
@@ -464,11 +464,12 @@ const SETTING_GROUPS = [
   ["Post everything five times", ["cadence.enabled", "cadence.trial_mode", "reedit.style", "reedit.max_reposts"]],
   ["Posting schedule", ["publishing.slots", "publishing.max_posts_per_day.instagram", "publishing.max_posts_per_day.instagram_trial",
                         "publishing.max_posts_per_day.tiktok", "publishing.max_posts_per_day.youtube"]],
-  ["Long-form YouTube", ["longform.enabled"]],
+  ["Long-form YouTube", ["longform.enabled", "thumbnails.ai.enabled", "thumbnails.ai.mode"]],
   ["Phone access", ["dashboard.lan_access", "dashboard.pin"]],
 ];
 const CHOICE_LABELS = {manual: "Post by hand (reminder)", api: "Automatic (Upload-Post)", skip: "Don't make trial reels",
-  reedit: "New edit each time", same: "Same file"};
+  reedit: "New edit each time", same: "Same file",
+  background: "AI background + channel template (most consistent)", full: "Full AI design (uses your photos)"};
 async function renderSettings(v) {
   const data = await api("/api/settings"), f = data.fields;
   const input = (k) => {

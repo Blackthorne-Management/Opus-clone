@@ -10,7 +10,8 @@ from logging.handlers import RotatingFileHandler
 
 from .config import SECRET_ENV_VARS, Config
 
-_KEYISH = re.compile(r"(sk-ant-[A-Za-z0-9_\-]{8,}|sk-[A-Za-z0-9_\-]{20,}|(?i:apikey)\s+[A-Za-z0-9._\-]{12,})")
+_KEYISH = re.compile(r"(sk-ant-[A-Za-z0-9_\-]{8,}|sk-[A-Za-z0-9_\-]{20,}|AIza[0-9A-Za-z_\-]{30,}"
+                     r"|(?i:apikey)\s+[A-Za-z0-9._\-]{12,})")
 
 
 class RedactSecrets(logging.Filter):

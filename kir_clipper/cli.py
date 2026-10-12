@@ -49,6 +49,14 @@ def cmd_doctor(args) -> int:
     if cfg.get("publishing.provider") == "upload_post":
         check("UPLOAD_POST_API_KEY set", secret("UPLOAD_POST_API_KEY") or cfg.dry_run,
               "add it to .env (not needed while dry_run is on)")
+    if cfg.get("thumbnails.ai.enabled"):
+        from .gemini_images import api_key
+        if not api_key():
+            print("  [--] GEMINI_API_KEY not set: thumbnails use the built-in template (add it to .env for AI art)")
+        else:
+            print(f"  [OK] Gemini thumbnails on ({cfg.get('thumbnails.ai.mode', 'background')} mode)")
+    if not any(cfg.resolve(cfg.get("thumbnails.person_dir", "brand/thumbnail/person")).glob("*.png")):
+        print("  [--] no photos in brand/thumbnail/person: thumbnails won't include you (see the README there)")
     backend = cfg.get("transcription.backend")
     if backend == "openai":
         check("OPENAI_API_KEY set", secret("OPENAI_API_KEY"), "add it to .env")

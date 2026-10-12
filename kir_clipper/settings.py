@@ -24,6 +24,8 @@ FIELDS: dict[str, tuple] = {
     "publishing.max_posts_per_day.tiktok": (int, (0, 20), "TikTok posts per day"),
     "publishing.max_posts_per_day.youtube": (int, (0, 20), "YouTube posts per day"),
     "longform.enabled": (bool, None, "Make a long-form YouTube version of every stream"),
+    "thumbnails.ai.enabled": (bool, None, "AI thumbnail art from Gemini (needs GEMINI_API_KEY)"),
+    "thumbnails.ai.mode": (str, ("background", "full"), "Gemini paints the background only, or designs the whole thumbnail"),
     "dashboard.lan_access": (bool, None, "Open the dashboard from your phone on the same Wi-Fi (restart needed)"),
     "dashboard.pin": (str, "pin", "PIN for phone access, 4-8 digits (restart needed)"),
 }

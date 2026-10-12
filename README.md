@@ -40,6 +40,7 @@ Open `.env` in Notepad and fill in:
 | Key | Where to get it | Needed for |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | console.anthropic.com → API keys | Picking and scoring clips (required) |
+| `GEMINI_API_KEY` | aistudio.google.com → Get API key (optional) | AI thumbnail art; without it thumbnails use the template |
 | `UPLOAD_POST_API_KEY` | Upload-Post dashboard → API keys | Posting (not needed while in dry-run) |
 | `ALERT_WEBHOOK_URL` | Discord channel → Integrations → Webhooks (optional) | Daily summary and failure alerts on your phone |
 | `OPENAI_API_KEY` | only if you switch transcription to the Whisper API | |
@@ -314,6 +315,13 @@ concepts per video. In the Long-form tab, click the one you like or **Make 3 new
 - Put cut-out photos of yourself in `brand\thumbnail\person\`, named by expression (`shocked.png`,
   `serious.png`, `pointing.png`...). Transparent PNGs work best; on iPhone, touch and hold yourself in a
   photo and choose Copy/Share to get one. Without photos, thumbnails are text-only.
+- **AI art from Google Gemini.** Add `GEMINI_API_KEY` to `.env` (get one at aistudio.google.com; billing
+  must be on). In the default **background** mode Gemini paints a unique scene for each thumbnail and the app
+  grades it into the red/blue look and adds the words, your photo and the accent, so every thumbnail is
+  different but clearly part of the same channel. **Full** mode (Settings tab) lets Gemini design the whole
+  thumbnail from your photos, with your recently chosen thumbnails as style examples so it stays on-brand.
+  Cost is about $0.07 per image, so roughly $0.20 per video for three options (`thumbnails.ai` in
+  `config.yaml`). If Gemini is unavailable, the template is used and the option shows why.
 - Colours and font are under `thumbnails:` in `config.yaml` (Anton is bundled).
 - Preview the style any time: `kir thumbnails --title "Why discipline beats motivation"`.
 - Upload-Post can only attach a thumbnail from a public web link, so when a long-form video goes live you

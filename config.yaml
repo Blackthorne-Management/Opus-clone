@@ -191,6 +191,17 @@ thumbnails:
   person_dir: brand/thumbnail/person
   font: ""                    # blank = bundled Anton (brand/fonts/thumbnail), then Impact
   logo: true
+  # AI art from Google Gemini (needs GEMINI_API_KEY in .env). About $0.07 per image at 1K, so ~$0.20 per video
+  # for 3 options. If Gemini fails or has no key, the template above is used, so thumbnails always arrive.
+  ai:
+    enabled: true
+    model: gemini-3.1-flash-image   # if Google renames it, the app finds the current image model itself
+    mode: background                # background = Gemini paints the scene, the app adds text/photo in the channel
+                                    #   style (most consistent); full = Gemini designs the whole thumbnail from your
+                                    #   photos and your recent picks as style references
+    image_size: 1K                  # 1K | 2K | 4K (bigger costs more; YouTube shows 1280x720)
+    style_refs: 2                   # full mode: how many of your recently chosen thumbnails to show as style examples
+    style: ""                       # optional: replace the built-in style description
   palette:
     primary: "#E11D2E"        # red
     secondary: "#1D4ED8"      # blue

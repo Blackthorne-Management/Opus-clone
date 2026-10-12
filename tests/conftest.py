@@ -80,6 +80,8 @@ class FakeLLM:
 @pytest.fixture
 def cfg(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)   # tests never call the real Gemini
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     overrides = {
         "paths": {k: str(tmp_path / k) for k in ("inbox", "processed", "failed", "data")},
         "render": {"width": 270, "height": 480, "fps": 15, "encoder": "libx264", "crf": 30},
