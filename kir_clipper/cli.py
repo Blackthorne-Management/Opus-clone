@@ -306,6 +306,14 @@ def cmd_run(args) -> int:
                     log.exception("Re-edit job failed")
                 warnings = daily_checks(cfg)
                 summary = daily_summary(conn, cfg)
+                if local.weekday() == 0:  # Mondays: posting-time review
+                    try:
+                        from .optimize import weekly
+                        tips = weekly(conn, cfg)
+                        if tips:
+                            summary += "\n\nPosting times:\n" + "\n".join(f"- {t}" for t in tips)
+                    except Exception:
+                        log.exception("Posting-time review failed")
                 if warnings:
                     summary += "\n\nNeeds attention:\n" + "\n".join(f"- {w}" for w in warnings)
                 notify(cfg, "Daily summary", summary, level="alert" if warnings else "info")

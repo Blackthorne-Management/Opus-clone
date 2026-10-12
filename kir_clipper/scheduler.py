@@ -23,9 +23,11 @@ def _tz(cfg: Config) -> ZoneInfo:
     return ZoneInfo(cfg.get("publishing.upload_post.timezone") or "UTC")
 
 
-def _slots(cfg: Config) -> list[time]:
+def _slots(cfg: Config, platform: str | None = None) -> list[time]:
+    """Posting times: per-platform ones (set from your results) win over the shared list."""
+    per = (cfg.get("publishing.slots_by_platform") or {}).get(platform) if platform else None
     out = []
-    for s in cfg.get("publishing.slots") or ["12:00"]:
+    for s in per or cfg.get("publishing.slots") or ["12:00"]:
         hh, mm = str(s).split(":")
         out.append(time(int(hh), int(mm)))
     return sorted(out)
@@ -56,7 +58,7 @@ def next_slot(conn, cfg: Config, platform: str, now: datetime, lead_minutes: int
     day = earliest.astimezone(tz).date()
     for _ in range(800):
         if per_day.get(day, 0) < cap:
-            for slot in _slots(cfg):
+            for slot in _slots(cfg, platform):
                 candidate = datetime.combine(day, slot, tzinfo=tz)
                 if candidate < earliest:
                     continue

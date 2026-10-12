@@ -126,6 +126,7 @@ def create_app(cfg: Config) -> FastAPI:
             "service": service_status(c),
             "free_gb": round(free_gb(cfg.data_dir), 1),
             "min_free_gb": float(cfg.get("maintenance.min_free_gb", 20)),
+            "optimize_min": int(cfg.get("optimize.min_posts", 20)),
             "processing": [dict(r) for r in c.execute(
                 "SELECT id, original_path FROM streams WHERE status='processing' ORDER BY id")],
             "cadence": [{"name": st["name"], "label": step_label(st["name"], cfg), "day": int(st.get("day", 0)),
@@ -375,6 +376,24 @@ def create_app(cfg: Config) -> FastAPI:
             for f in saved:
                 if f is not None:
                     f.unlink(missing_ok=True)
+
+    @app.get("/api/optimize")
+    def optimize_get():
+        from ..optimize import suggestions
+        return suggestions(conn(), cfg)
+
+    @app.post("/api/optimize/apply")
+    def optimize_apply(body: dict = Body(...)):
+        from ..optimize import suggest
+        platform = body.get("platform")
+        if platform not in (cfg.get("publishing.platforms") or []):
+            raise HTTPException(400, "Unknown platform")
+        sug = suggest(conn(), cfg, platform)
+        if not sug["enough"]:
+            raise HTTPException(400, "Not enough results yet to change the times")
+        settings_mod.update(cfg, {f"publishing.slots_by_platform.{platform}": sug["suggested"]})
+        db.log_event(conn(), "posting_times_applied", platform, sug["suggested"])
+        return {"ok": True, "slots": sug["suggested"]}
 
     @app.get("/api/settings")
     def get_settings():

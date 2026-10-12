@@ -35,8 +35,19 @@ def current(cfg: Config) -> dict:
             for k, (t, c, h) in FIELDS.items()}
 
 
+PER_PLATFORM_SLOTS = re.compile(r"publishing\.slots_by_platform\.(instagram|tiktok|youtube|facebook|x)$")
+
+
+def _field(key: str):
+    if key in FIELDS:
+        return FIELDS[key]
+    if PER_PLATFORM_SLOTS.match(key):
+        return (list, None, f"Posting times for {key.rsplit('.', 1)[1]}")
+    return None
+
+
 def _coerce(key: str, value):
-    typ, rule, _ = FIELDS[key]
+    typ, rule, _ = _field(key)
     if typ is bool:
         if isinstance(value, str):
             value = value.lower() in ("1", "true", "yes", "on")
@@ -45,7 +56,7 @@ def _coerce(key: str, value):
         value = int(value)
         lo, hi = rule
         if not lo <= value <= hi:
-            raise ValueError(f"{FIELDS[key][2]}: must be between {lo} and {hi}")
+            raise ValueError(f"{_field(key)[2]}: must be between {lo} and {hi}")
         return value
     if typ is list:
         items = value if isinstance(value, list) else re.split(r"[,\s]+", str(value))
@@ -62,7 +73,7 @@ def _coerce(key: str, value):
             raise ValueError("The PIN must be 4 to 8 digits")
         return value
     if value not in rule:
-        raise ValueError(f"{FIELDS[key][2]}: choose one of {', '.join(rule)}")
+        raise ValueError(f"{_field(key)[2]}: choose one of {', '.join(rule)}")
     return value
 
 
@@ -80,7 +91,7 @@ def update(cfg: Config, changes: dict) -> dict:
     """Validate, apply to the running config, and persist to config.local.yaml. Returns what changed."""
     clean = {}
     for key, value in changes.items():
-        if key not in FIELDS:
+        if _field(key) is None:
             raise ValueError(f"'{key}' can't be changed from the dashboard")
         clean[key] = _coerce(key, value)
     merged = {**{k: cfg.get(k) for k in FIELDS}, **clean}

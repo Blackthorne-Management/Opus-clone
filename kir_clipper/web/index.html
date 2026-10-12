@@ -120,6 +120,24 @@ function planList(tl) {
     <td>${s.status === "posted" ? when(s.at) : s.status === "post_by_hand" ? `${when(s.at)} · <b>due now</b>`
       : `${when(s.at)} · <b data-countdown="${s.at}">${countdown(s.at)}</b>`}</td></tr>`).join("")}</table></div>`;
 }
+async function renderBestTimes() {
+  const el = $("#besttimes"); if (!el) return;
+  const data = await api("/api/optimize");
+  el.classList.remove("muted");
+  el.innerHTML = data.map(p => {
+    if (!p.posts_with_data) return `<p><b>${p.platform}</b>: <span class="muted">no results yet. Times are suggested once posts have 3-day numbers.</span></p>`;
+    const rows = p.hours.map(h => `<tr><td>${String(h.hour).padStart(2,"0")}:00</td><td>${h.posts}</td><td>${h.median_views.toLocaleString()}</td>
+      <td style="color:${h.lift>=1?"var(--ok)":"var(--accent)"}">${h.lift >= 1 ? "+" : ""}${Math.round((h.lift-1)*100)}%</td></tr>`).join("");
+    const changed = p.enough && p.suggested.join() !== p.current.join();
+    return `<div class="card" style="display:block;margin-bottom:10px"><b>${p.platform}</b>
+      <span class="muted">${p.posts_with_data} posts with results · now posting at ${p.current.join(", ")}</span>
+      <details><summary>By hour</summary><table><tr><th>hour</th><th>posts</th><th>typical views</th><th>vs your average</th></tr>${rows}</table></details>
+      ${!p.enough ? `<p class="muted">Needs ${summary.optimize_min||20}+ posts with results before suggesting changes.</p>`
+        : changed ? `<p>Suggested: <b>${p.suggested.join(", ")}</b>${p.explore_slot ? ` <span class="muted">(${p.explore_slot} tests a new hour)</span>` : ""}</p>
+          <button class="btn approve" onclick="api('/api/optimize/apply',{platform:'${p.platform}'}).then(() => { toast('Posting times updated for ${p.platform}'); load(); })">Use these times</button>`
+        : `<p class="muted">Your current times already match your best hours.</p>`}</div>`;
+  }).join("");
+}
 async function addNumbers(postId) {
   const bg = await modal(`<h3>Add this post's numbers</h3><p class="muted">For posts made by hand (Trial Reels).
     Best around 3 days after posting. Find them under the reel's Insights in the Instagram app.</p>
@@ -250,9 +268,11 @@ async function load() {
       <div class="hist">${h.map(n => `<div style="height:${n/max*100}%"><span>${n||""}</span></div>`).join("")}</div>
       <div class="row muted">${h.map((_, i) => `<span style="text-align:center">${i*10}</span>`).join("")}</div>
       <p class="muted">Auto-post at ${summary.auto_post_threshold}+, drop below ${summary.auto_reject_floor}. Tune in config.yaml.</p>
+      <h3>Best posting times</h3><div id="besttimes" class="muted">Loading...</div>
       <h3>Score vs real performance</h3><pre>${esc(summary.performance)}</pre>
       <h3>Recent streams</h3><table><tr><th>#</th><th>file</th><th>min</th><th>status</th><th>processed</th></tr>
       ${summary.streams.map(s => `<tr><td>${s.id}</td><td>${esc(s.original_path)}</td><td>${Math.round((s.duration||0)/60)}</td><td>${s.status}${s.error?`<br><span class="muted">${esc(s.error)}</span>`:""}</td><td>${when(s.processed_at)}</td></tr>`).join("")}</table>`;
+    renderBestTimes();
     return;
   }
   if (current === "posts") {

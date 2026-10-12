@@ -197,3 +197,10 @@ thumbnails:
     text: "#FFFFFF"
     highlight: "#FFD400"      # the one yellow word
     outline: "#000000"
+
+# Best posting times, learned from your own results (Stats tab).
+optimize:
+  min_posts: 20               # posts with 3-day numbers needed on a platform before suggesting times
+  min_posts_per_hour: 3       # an hour needs this many posts before it's trusted
+  explore: true               # keep one slot testing a new hour next to the best one
+  auto_apply: false           # true = apply better times automatically every Monday
