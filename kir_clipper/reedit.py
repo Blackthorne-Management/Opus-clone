@@ -21,7 +21,6 @@ from .config import Config
 from .highlights import PLATFORMS, REFINE_SCHEMA, clip_words
 from .pipeline import gate
 from .render import CROP_MODES, ZOOM_MODES, default_recipe, render_clip
-from .scheduler import plan_posts
 
 log = logging.getLogger("kir.reedit")
 
@@ -103,6 +102,8 @@ def find_candidates(conn, cfg: Config, now: datetime | None = None) -> list[dict
             continue  # a version is already in the queue
         if any(c["status"] == "scheduled" for c in lineage):
             continue
+        if max(c["version"] for c in lineage) > int(cfg.get("reedit.max_reposts", 2)):
+            continue  # already reposted the maximum number of times (cadence steps 4 and 5)
         root = next((c for c in lineage if c["id"] == root_id), None)
         if root is None or (root["note"] or "").startswith("no_repost"):
             continue
@@ -183,6 +184,9 @@ def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
     words = clip_words(transcript["words"], root["start"], root["end"])
     text = " ".join(w["w"] for w in words)
 
+    if cfg.get("reedit.style", "reedit") == "same":
+        return _repost_same(cfg, conn, root, lineage)
+
     previous_recipes = [c["recipe"] for c in lineage if c.get("recipe")]
     previous_copy = [{"hook": c["hook"], "hook_overlay": (c.get("recipe") or {}).get("hook_text"), "title": c["title"]}
                      for c in lineage]
@@ -211,5 +215,23 @@ def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
     log.info("Re-edit v%d of clip %s -> clip %s (%s, %s captions, %s crop, %s zoom)", version, root["id"], clip_id,
              status, recipe["caption_style"], recipe["crop_mode"], recipe["zoom"])
     if status == "approved":
-        plan_posts(conn, cfg, clip_id)
+        from .cadence import plan_clip
+        plan_clip(cfg, conn, clip_id)
+    return clip_id
+
+
+def _repost_same(cfg: Config, conn, root: dict, lineage: list[dict]) -> int:
+    """Repost the original render unchanged (reedit.style: same). Still goes through review/score rules."""
+    version = max(c["version"] for c in lineage) + 1
+    clip = {k: root[k] for k in ("start", "end", "score", "hook", "title", "caption", "hashtags", "platform_captions")}
+    clip["reason"] = f"repost {version - 1} of clip {root['id']}"
+    clip_id = db.insert_clip(conn, root["stream_id"], clip, "pending", root.get("recipe"),
+                             parent_clip_id=root["id"], version=version)
+    decision = gate(clip["score"], cfg)
+    status = "review" if decision != "auto" else ("dry_run" if cfg.dry_run else "approved")
+    db.update_clip(conn, clip_id, status=status, file_path=root["file_path"])
+    db.log_event(conn, "clip_reposted", clip_id, {"root": root["id"], "version": version})
+    if status == "approved":
+        from .cadence import plan_clip
+        plan_clip(cfg, conn, clip_id)
     return clip_id

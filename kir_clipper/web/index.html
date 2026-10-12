@@ -61,6 +61,22 @@ let summary = {};
 const $ = (s, el=document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const when = iso => iso ? new Date(iso).toLocaleString([], {weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone: summary.timezone || undefined}) : "";
+const countdown = iso => {
+  const ms = new Date(iso) - Date.now();
+  if (ms <= 0) return "due now";
+  const m = Math.floor(ms / 60000), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60;
+  return "in " + (d ? `${d}d ${h}h` : h ? `${h}h ${mm}m` : `${mm}m`);
+};
+setInterval(() => document.querySelectorAll("[data-countdown]").forEach(el => el.textContent = countdown(el.dataset.countdown)), 30000);
+const STEP_STATUS = {posted: "✓ posted", scheduled: "scheduled", post_by_hand: "post by hand now", failed: "failed", projected: "planned"};
+function planList(tl) {
+  if (!tl || !tl.length) return "";
+  return `<div><b style="font-size:13px">Posting plan</b><table style="margin-top:4px">${tl.map(s => `<tr>
+    <td>${s.number}. ${esc(s.label)}</td><td class="muted">${(s.platforms||[]).join(", ")}</td>
+    <td>${STEP_STATUS[s.status]||s.status}</td>
+    <td>${s.status === "posted" ? when(s.at) : s.status === "post_by_hand" ? `${when(s.at)} · <b>due now</b>`
+      : `${when(s.at)} · <b data-countdown="${s.at}">${countdown(s.at)}</b>`}</td></tr>`).join("")}</table></div>`;
+}
 const scoreClass = s => s >= (summary.auto_post_threshold||90) ? "s-hi" : s >= (summary.auto_reject_floor||60) ? "s-mid" : "s-lo";
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
@@ -90,7 +106,7 @@ function clipCard(c) {
       <div><b>Hook:</b> ${esc(c.hook)}</div>
       <div class="muted">${esc(c.reason)}</div>
       ${c.suggested_time ? `<div class="muted">Next free slot: ${when(c.suggested_time)}</div>` : ""}
-      ${posts ? `<div class="muted">${posts}</div>` : ""}
+      ${c.timeline && c.timeline.length ? planList(c.timeline) : posts ? `<div class="muted">${posts}</div>` : ""}
       <label>Title<input data-f="title" value="${esc(c.title)}"></label>
       <label>Caption<textarea data-f="caption">${esc(c.caption)}</textarea></label>
       <label>Hashtags<input data-f="hashtags" value="${esc((c.hashtags||[]).join(" "))}"></label>
@@ -140,7 +156,13 @@ function wire() {
 }
 async function load() {
   summary = await api("/api/summary"); renderTabs();
-  const v = $("#view");
+  const root = $("#view");
+  const banner = summary.manual_due ? `<div class="card" style="display:block;border-color:var(--warn);margin-bottom:16px">
+    <b>${summary.manual_due} Trial Reel${summary.manual_due>1?"s are":" is"} ready to post by hand.</b>
+    Open <a href="#posts">Post calendar</a>, download it, post it in the Instagram app as a
+    Trial Reel, then click Mark posted.</div>` : "";
+  root.innerHTML = banner;
+  const v = document.createElement("div"); root.appendChild(v);
   if (current === "longform") { await renderLongform(v); return; }
   if (current === "stats") {
     const h = summary.histogram, max = Math.max(1, ...h);
@@ -155,9 +177,14 @@ async function load() {
   }
   if (current === "posts") {
     const posts = await api("/api/posts");
-    v.innerHTML = posts.length ? `<table><tr><th>when</th><th>platform</th><th>clip</th><th>status</th><th></th></tr>${posts.map(p =>
-      `<tr><td>${when(p.publish_at)}</td><td>${p.platform}</td><td>${p.clip_id} · ${esc(p.title)} (${p.score})</td><td>${p.status}${p.last_error?`<br><span class="muted">${esc(p.last_error)}</span>`:""}</td>
-       <td>${p.status==="planned"?`<button class="btn plain" onclick="api('/api/posts/${p.id}/cancel',{}).then(load)">Cancel</button>`:""}</td></tr>`).join("")}</table>`
+    v.innerHTML = posts.length ? `<table><tr><th>when</th><th>step</th><th>platform</th><th>clip</th><th>status</th><th></th></tr>${posts.map(p =>
+      `<tr><td>${when(p.publish_at)}${["planned","submitted"].includes(p.status)?`<br><b data-countdown="${p.publish_at}">${countdown(p.publish_at)}</b>`:""}</td>
+       <td>${esc(p.label)}${p.trial?' <span class="pill dry">trial</span>':""}</td><td>${p.platform}</td>
+       <td>${p.clip_id} · ${esc(p.title)}${p.kind==="short"?` (${p.score})`:""}</td>
+       <td>${p.status==="manual"?"<b>post by hand now</b>":p.status}${p.last_error?`<br><span class="muted">${esc(p.last_error)}</span>`:""}</td>
+       <td>${p.status==="manual"?`<a class="btn plain" href="/media/post/${p.id}" download>Download</a>
+           <button class="btn approve" onclick="api('/api/posts/${p.id}/mark-posted',{}).then(load)">Mark posted</button>`:""}
+           ${["planned","manual"].includes(p.status)?`<button class="btn plain" onclick="api('/api/posts/${p.id}/cancel',{}).then(load)">Cancel</button>`:""}</td></tr>`).join("")}</table>`
       : `<div class="empty">No posts yet.</div>`;
     return;
   }
@@ -275,6 +302,7 @@ async function renderLongform(v) {
   });
   if (groups.some(g => g.segments.some(s => WORKING.includes(s.status)))) lfTimer = setTimeout(() => current === "longform" && load(), 15000);
 }
+window.addEventListener("hashchange", () => { current = location.hash.slice(1) || "review"; load(); });
 load();
 </script>
 </body>

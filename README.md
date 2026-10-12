@@ -223,6 +223,35 @@ relying on it; the upload of a multi-GB file can take a while on home internet.
 
 ---
 
+## 5c. Post everything five times
+
+Every short clip that gets approved (automatically at 90+, or by you) follows this plan:
+
+| # | Step | When | Where |
+|---|---|---|---|
+| 1 | Trial Reel | day 1 | Instagram, shown to non-followers first |
+| 2 | Feed Reel | day 1, a later slot than the trial | Instagram, TikTok, YouTube |
+| 3 | Mirrored Trial Reel | day 2 | Instagram. The picture is flipped left-to-right, captions stay readable |
+| 4 | Feed Reel +90 days | ~90 days later | re-edited version (new look + new hook), all platforms |
+| 5 | Feed Reel +180 days | ~180 days later | another re-edit, then it stops |
+
+Every clip card in **Scheduled / Posted** shows its **Posting plan** with each step's status and a live
+countdown ("in 1d 6h"), including the projected dates for steps 4 and 5. The **Post calendar** lists every
+upcoming post with its step and countdown.
+
+**Trial Reels are posted by hand for now.** Instagram's API supports trial reels, but Upload-Post's
+field name for it couldn't be confirmed. So by default (`cadence.trial_mode: manual`), when a trial reel
+is due you get a notification and a banner in the dashboard. Click **Download**, post it in the
+Instagram app as a Trial Reel, then click **Mark posted**. If Upload-Post confirms how to send trial
+reels, put their field names in `cadence.trial_api_fields`, set `trial_mode: api`, and it becomes fully
+automatic. `trial_mode: skip` turns trial reels off.
+
+Change the steps under `cadence.steps` in `config.yaml` (which platforms, which day). Steps 4 and 5 come
+from the `reedit` section: `max_reposts: 2` stops after the second repost, and `style: same` reposts the
+original file instead of a re-edit. Set `cadence.enabled: false` to go back to one post per platform.
+
+---
+
 ## 6. Tuning with real results
 
 Upload-Post's analytics access varies by plan, so performance import is a CSV for now:

@@ -26,8 +26,9 @@ class Publisher(Protocol):
     name: str
 
     def schedule(self, clip_path: Path, caption: str, platforms: list[str], publish_at: datetime | None,
-                 title: str | None = None) -> str:
-        """Hand a clip to the service. `publish_at=None` means post now. Returns a job/request id."""
+                 title: str | None = None, extra: dict | None = None) -> str:
+        """Hand a clip to the service. `publish_at=None` means post now. `extra` carries service-specific
+        fields (e.g. Instagram Trial Reel options). Returns a job/request id."""
 
     def status(self, post_id: str) -> PostStatus:
         """Look up a previously scheduled job."""

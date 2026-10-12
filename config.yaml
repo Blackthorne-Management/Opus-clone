@@ -87,6 +87,7 @@ publishing:
     tiktok: 3
     instagram: 2
     youtube: 3
+    instagram_trial: 3        # trial reels are counted separately (they go to non-followers)
     facebook: 2
     x: 3
   min_gap_minutes: 180        # minimum spacing between posts on the same platform
@@ -99,6 +100,9 @@ publishing:
 
 reedit:
   interval_days: 90           # set to 1 to test
+  max_reposts: 2              # steps 4 and 5 of the cadence: +90 days and +180 days, then stop
+  style: reedit               # reedit = new look + new hook each time; same = repost the original file
+  platforms: [instagram, tiktok, youtube]
   max_reposts_per_week: 4
   skip_below_median: true     # once performance data exists, skip clips that underperformed
   severe_underperform_ratio: 0.5
@@ -142,3 +146,24 @@ longform:
   watermark: true
   intro_seconds: 4              # generated intro, unless brand/intro.mp4 exists
   outro_seconds: 8              # generated outro, unless brand/outro.mp4 exists
+
+# "Post everything five times" (per short clip):
+#   1. Trial Reel      day 0     Instagram, shown to non-followers first
+#   2. Feed Reel       day 0     Instagram + TikTok + YouTube (a later slot than the trial)
+#   3. Mirrored Trial  day 1     Instagram, horizontally flipped picture (text stays readable)
+#   4. Feed + 90 days  day 90    handled by the re-edit job (reedit section)
+#   5. Feed + 90 days  day 180   handled by the re-edit job
+cadence:
+  enabled: true
+  steps:
+    - {name: trial,          day: 0, platforms: [instagram], trial: true}
+    - {name: feed,           day: 0, platforms: [instagram, tiktok, youtube]}
+    - {name: mirrored_trial, day: 1, platforms: [instagram], trial: true, mirror: true}
+  # How trial reels go out:
+  #   manual - the app renders the file and reminds you at the scheduled time; you post it as a Trial Reel
+  #            in the Instagram app and click "Mark posted" in the dashboard (default: works today)
+  #   api    - sent through Upload-Post with the fields in trial_api_fields (confirm the field names with
+  #            Upload-Post support first; Instagram's API supports trial reels, Upload-Post's name for it is unconfirmed)
+  #   skip   - don't make trial reels at all
+  trial_mode: manual
+  trial_api_fields: {}        # e.g. {instagram_trial_reel: "true", instagram_graduation_strategy: "SS_PERFORMANCE"}

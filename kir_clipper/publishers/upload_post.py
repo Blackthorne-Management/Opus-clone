@@ -40,11 +40,13 @@ class UploadPostPublisher:
         self._headers = {"Authorization": f"Apikey {key}"}
 
     def schedule(self, clip_path: Path, caption: str, platforms: list[str], publish_at: datetime | None,
-                 title: str | None = None) -> str:
+                 title: str | None = None, extra: dict | None = None) -> str:
         data: dict[str, str | list[str]] = {"user": self.user, "title": caption, "async_upload": "true",
                                             "platform[]": list(platforms)}
         if "youtube" in platforms:
             data.update(youtube_title=(title or caption)[:100], youtube_description=caption)
+        for key, value in (extra or {}).items():
+            data[str(key)] = str(value)
         if publish_at is not None:
             # Send local wall-clock time plus the IANA zone, so there is no ambiguity about offsets.
             if self.tz:

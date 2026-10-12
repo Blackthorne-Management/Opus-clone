@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS posts (
     posted_at TEXT,
     platform_post_id TEXT,
     request_id TEXT,                  -- posting-service job id
-    status TEXT NOT NULL,             -- planned | submitted | posted | failed | cancelled
+    status TEXT NOT NULL,             -- planned | submitted | manual | posted | failed | cancelled
+    step TEXT,                        -- cadence step: trial | feed | mirrored_trial | repost_90 | ...
+    trial INTEGER NOT NULL DEFAULT 0, -- 1 = Instagram Trial Reel (shown to non-followers first)
+    file_path TEXT,                   -- overrides the clip file (e.g. the mirrored version)
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
     last_error TEXT,
@@ -136,6 +139,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
     if cols and "kind" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN kind TEXT NOT NULL DEFAULT 'short'")
+    pcols = {r["name"] for r in conn.execute("PRAGMA table_info(posts)")}
+    for name, ddl in (("step", "TEXT"), ("trial", "INTEGER NOT NULL DEFAULT 0"), ("file_path", "TEXT")):
+        if pcols and name not in pcols:
+            conn.execute(f"ALTER TABLE posts ADD COLUMN {name} {ddl}")
 
 
 def log_event(conn: sqlite3.Connection, kind: str, ref: Any = None, detail: Any = None) -> None:
@@ -222,10 +229,12 @@ def update_longform(conn, lf_id: int, **fields) -> None:
 
 # ---- posts -----------------------------------------------------------------
 
-def insert_post(conn, clip_id: int, platform: str, publish_at: datetime) -> int:
+def insert_post(conn, clip_id: int, platform: str, publish_at: datetime, step: str | None = None,
+                trial: bool = False, file_path: str | None = None) -> int:
     cur = conn.execute(
-        "INSERT INTO posts(clip_id, platform, publish_at, status, created_at) VALUES (?,?,?,?,?)",
-        (clip_id, platform, iso(publish_at), "planned", iso(utcnow())),
+        """INSERT INTO posts(clip_id, platform, publish_at, status, step, trial, file_path, created_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (clip_id, platform, iso(publish_at), "planned", step, int(bool(trial)), file_path, iso(utcnow())),
     )
     return cur.lastrowid
 

@@ -14,7 +14,8 @@ from ..longform import apply_edits, set_segments
 from ..config import Config
 from ..performance import score_report
 from ..pipeline import approve_clip, edit_clip, reject_clip
-from ..scheduler import copy_for, next_slot
+from ..cadence import step_label, timeline
+from ..scheduler import copy_for, mark_posted, next_slot
 
 log = logging.getLogger("kir.web")
 HERE = Path(__file__).parent
@@ -47,6 +48,7 @@ def create_app(cfg: Config) -> FastAPI:
             "clips": counts, "posts": posts, "streams": streams,
             "histogram": [sum(1 for s in scores if b * 10 <= s < b * 10 + 10) for b in range(10)],
             "performance": score_report(c),
+            "manual_due": c.execute("SELECT COUNT(*) FROM posts WHERE status='manual'").fetchone()[0],
         }
 
     @app.get("/api/clips")
@@ -63,6 +65,7 @@ def create_app(cfg: Config) -> FastAPI:
             if r["status"] == "review" and platforms:
                 d["suggested_time"] = db.iso(next_slot(c, cfg, platforms[0], db.utcnow()))
             d["duration"] = round(d["end"] - d["start"], 1)
+            d["timeline"] = timeline(cfg, c, r["id"]) if d["posts"] else []
             out.append(d)
         return out
 
@@ -108,18 +111,40 @@ def create_app(cfg: Config) -> FastAPI:
     @app.get("/api/posts")
     def posts(limit: int = 200):
         rows = conn().execute(
-            """SELECT p.*, c.title, c.score FROM posts p JOIN clips c ON c.id=p.clip_id
-               ORDER BY CASE WHEN p.status IN ('planned','submitted') THEN 0 ELSE 1 END,
+            """SELECT p.*, c.title, c.score, c.kind, COALESCE(p.file_path, c.file_path) AS media_path
+               FROM posts p JOIN clips c ON c.id=p.clip_id
+               ORDER BY CASE WHEN p.status='manual' THEN -1 WHEN p.status IN ('planned','submitted') THEN 0 ELSE 1 END,
                         CASE WHEN p.status IN ('planned','submitted') THEN p.publish_at END ASC,
                         p.publish_at DESC LIMIT ?""",
             (limit,)).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["label"] = step_label(d["step"], cfg) if d["kind"] == "short" else "Long-form video"
+            out.append(d)
+        return out
+
+    @app.post("/api/posts/{post_id}/mark-posted")
+    def post_mark_posted(post_id: int, body: dict = Body(default={})):
+        try:
+            mark_posted(conn(), post_id, body.get("url"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True}
+
+    @app.get("/media/post/{post_id}")
+    def post_media(post_id: int):
+        row = conn().execute("""SELECT COALESCE(p.file_path, c.file_path) AS f FROM posts p
+                                JOIN clips c ON c.id=p.clip_id WHERE p.id=?""", (post_id,)).fetchone()
+        if not row or not row["f"] or not Path(row["f"]).exists():
+            raise HTTPException(404)
+        return FileResponse(row["f"], media_type="video/mp4", filename=Path(row["f"]).name)
 
     @app.post("/api/posts/{post_id}/cancel")
     def cancel(post_id: int):
         c = conn()
         row = c.execute("SELECT status FROM posts WHERE id=?", (post_id,)).fetchone()
-        if not row or row["status"] != "planned":
+        if not row or row["status"] not in ("planned", "manual"):
             raise HTTPException(400, "Only planned posts can be cancelled here; submitted posts must be removed in Upload-Post")
         db.update_post(c, post_id, status="cancelled")
         db.log_event(c, "post_cancelled", post_id)

@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import db, media
+from .cadence import plan_clip
 from .config import Config
 from .highlights import clip_words, find_highlights, fmt_ts
 from .notify import notify
@@ -156,7 +157,7 @@ def create_clips(cfg: Config, conn, stream_id: int, source: Path, clips: list[di
         if status == "approved":
             auto_ids.append(clip_id)
     for clip_id in auto_ids:  # already sorted best-first, so the best clip gets the earliest slot
-        plan_posts(conn, cfg, clip_id)
+        plan_clip(cfg, conn, clip_id)
     return counts
 
 
@@ -168,7 +169,10 @@ def approve_clip(cfg: Config, conn, clip_id: int, platforms: list[str] | None = 
         platforms = list(cfg.get("longform.platforms") or ["youtube"])
     db.update_clip(conn, clip_id, status="approved")
     db.log_event(conn, "clip_approved", clip_id)
-    plan_posts(conn, cfg, clip_id, platforms=platforms)
+    if platforms is None and clip["kind"] == "short":
+        plan_clip(cfg, conn, clip_id)
+    else:
+        plan_posts(conn, cfg, clip_id, platforms=platforms)
 
 
 def reject_clip(conn, clip_id: int, note: str | None = None) -> None:

@@ -117,7 +117,8 @@ def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int
     else:
         z = None
     last = "base"
-    pre = f"[base]fps={fps}"
+    # Mirroring flips the picture only; captions, hook text and logo are added afterwards so they stay readable.
+    pre = f"[base]{'hflip,' if recipe.get('mirror') else ''}fps={fps}"
     if z:
         chains.append(f"{pre},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={out_w}x{out_h}:fps={fps}[zoomed]")
     else:

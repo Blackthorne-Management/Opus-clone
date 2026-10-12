@@ -16,10 +16,10 @@ class DryRunPublisher:
     name = "dry_run"
 
     def schedule(self, clip_path: Path, caption: str, platforms: list[str], publish_at: datetime | None,
-                 title: str | None = None) -> str:
+                 title: str | None = None, extra: dict | None = None) -> str:
         job = f"dry-{uuid.uuid4().hex[:10]}"
-        log.info("[DRY RUN] would schedule %s to %s at %s | title=%r caption=%r", Path(clip_path).name,
-                 ",".join(platforms), publish_at or "now", title, caption[:80])
+        log.info("[DRY RUN] would schedule %s to %s at %s | title=%r caption=%r extra=%s", Path(clip_path).name,
+                 ",".join(platforms), publish_at or "now", title, caption[:80], extra or {})
         return job
 
     def status(self, post_id: str) -> PostStatus:
