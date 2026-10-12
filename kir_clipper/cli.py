@@ -160,6 +160,20 @@ def cmd_longform(args) -> int:
     return 0
 
 
+def cmd_import(args) -> int:
+    from datetime import datetime
+    from .importer import import_reel
+    cfg, conn = _ctx(args)
+    result = import_reel(cfg, conn, Path(args.file), datetime.fromisoformat(args.posted), title=args.title or "",
+                         caption=args.caption or "", platforms=args.platforms.split(","), done_steps=args.done.split(","),
+                         has_text=not args.no_text, clean=Path(args.clean) if args.clean else None,
+                         missed=args.missed, auto_repost=not args.review)
+    print(f"clip {result['clip_id']}")
+    for st in result["steps"]:
+        print(f"  {st['label']:<24} {st['action']:<28} {st.get('at') or ''}")
+    return 0
+
+
 def cmd_run(args) -> int:
     """Everything in one long-running process: watcher, publisher loop, daily jobs, dashboard."""
     import uvicorn
@@ -274,6 +288,18 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("csv")
     s.set_defaults(fn=cmd_perf_import)
     sub.add_parser("perf-report", help="score vs performance report").set_defaults(fn=cmd_perf_report)
+    s = sub.add_parser("import", help="import a reel you already posted into the five-step schedule")
+    s.add_argument("file")
+    s.add_argument("--posted", required=True, help='when it was first posted, e.g. "2026-09-20 18:00" (local time)')
+    s.add_argument("--done", default="feed", help="steps already done: trial,feed,mirrored_trial,repost_1,repost_2")
+    s.add_argument("--platforms", default="instagram", help="where the feed reel was posted, e.g. instagram,tiktok")
+    s.add_argument("--title")
+    s.add_argument("--caption")
+    s.add_argument("--clean", help="optional copy without on-screen text")
+    s.add_argument("--no-text", action="store_true", help="the reel has no captions/text on screen")
+    s.add_argument("--missed", choices=["skip", "now"], default="skip", help="steps whose date has passed")
+    s.add_argument("--review", action="store_true", help="review reposts instead of posting them automatically")
+    s.set_defaults(fn=cmd_import)
     s = sub.add_parser("longform", help="long-form YouTube edits: list | build <longform id> | whole <stream id>")
     s.add_argument("action", choices=["list", "build", "whole"])
     s.add_argument("id", type=int, nargs="?")

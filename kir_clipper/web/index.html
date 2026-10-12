@@ -53,7 +53,7 @@
 <script>
 const TABS = [
   ["review", "Needs review"], ["dry_run", "Would auto-post"], ["approved,scheduled", "Scheduled"],
-  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["longform", "Long-form"], ["posts", "Post calendar"],
+  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["longform", "Long-form"], ["import", "Import posted reel"], ["posts", "Post calendar"],
   ["stats", "Stats"], ["events", "Activity log"],
 ];
 let current = location.hash.slice(1) || "review";
@@ -85,7 +85,7 @@ async function api(path, body) {
 }
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => {
-    const n = k.includes("posts")||k==="stats"||k==="events"||k==="longform" ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
+    const n = k.includes("posts")||k==="stats"||k==="events"||k==="longform"||k==="import" ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
     return `<button class="${k===current?"on":""}" data-k="${k}">${l}${n!==""?` (${n})`:""}</button>`;
   }).join("");
   $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { current = b.dataset.k; location.hash = current; load(); });
@@ -101,7 +101,8 @@ function clipCard(c) {
   return `<div class="card" data-id="${c.id}">
     ${c.file_path ? `<video src="/media/clip/${c.id}" controls preload="metadata"></video>` : `<div class="muted" style="width:200px">not rendered</div>`}
     <div class="body">
-      <div class="row" style="align-items:baseline"><span class="score ${scoreClass(c.score)}">${c.score}</span>
+      <div class="row" style="align-items:baseline">${r.imported ? `<span class="pill" style="background:var(--line);color:var(--ink)">Imported reel</span>`
+        : `<span class="score ${scoreClass(c.score)}">${c.score}</span>`}
         <span class="muted">clip ${c.id}${c.version>1?` · re-edit v${c.version} of ${c.parent_clip_id}`:""} · ${c.duration}s · ${c.status}${c.note?` · ${esc(c.note)}`:""}</span></div>
       <div><b>Hook:</b> ${esc(c.hook)}</div>
       <div class="muted">${esc(c.reason)}</div>
@@ -113,12 +114,12 @@ function clipCard(c) {
       <details><summary>Per-platform copy</summary>${Object.entries(c.copy).map(([p, v]) =>
         `<label>${p} title<input data-p="${p}" data-k="title" value="${esc(v.title)}"></label>
          <label>${p} caption<textarea data-p="${p}" data-k="caption">${esc(v.caption)}</textarea></label>`).join("")}</details>
-      <details><summary>Re-render (style, crop, zoom, timing)</summary>
+      ${r.imported ? "" : `<details><summary>Re-render (style, crop, zoom, timing)</summary>
         <div class="row">${sel("caption_style", styles, r.caption_style)}${sel("crop_mode", crops, r.crop_mode)}${sel("zoom", zooms, r.zoom)}</div>
         <div class="row"><label>Start (s)<input data-b="start" value="${c.start}"></label><label>End (s)<input data-b="end" value="${c.end}"></label>
           <label>Hook overlay<input data-r="hook_text" value="${esc(r.hook_text)}"></label></div>
         <button class="btn plain" data-a="render">Re-render</button>
-      </details>
+      </details>`}
       <div class="row">
         ${canAct ? `<button class="btn approve" data-a="approve">Approve &amp; schedule</button>` : ""}
         <button class="btn plain" data-a="save">Save copy</button>
@@ -164,6 +165,7 @@ async function load() {
   root.innerHTML = banner;
   const v = document.createElement("div"); root.appendChild(v);
   if (current === "longform") { await renderLongform(v); return; }
+  if (current === "import") { renderImport(v); return; }
   if (current === "stats") {
     const h = summary.histogram, max = Math.max(1, ...h);
     v.innerHTML = `<h3>Score distribution (original clips)</h3>
@@ -301,6 +303,71 @@ async function renderLongform(v) {
     });
   });
   if (groups.some(g => g.segments.some(s => WORKING.includes(s.status)))) lfTimer = setTimeout(() => current === "longform" && load(), 15000);
+}
+
+// ---------------------------------------------------------------- import an already-posted reel
+function localNow() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); }
+function renderImport(v) {
+  const steps = summary.cadence || [];
+  const plats = ["instagram", "tiktok", "youtube", "facebook", "x"];
+  v.innerHTML = `<div class="card" style="display:block;max-width:820px">
+    <h3 style="margin-top:0">Import a reel you've already posted</h3>
+    <p class="muted">It joins the five-step schedule from the day you first posted it. Steps you've already done are
+      recorded; the rest are scheduled (or skipped if their date has passed).</p>
+    <form id="imp">
+      <label>The reel (the exact video you posted)<input type="file" name="video" accept="video/*" required></label>
+      <div class="row"><label>When was it first posted?<input type="datetime-local" name="posted_at" value="${localNow()}" required></label></div>
+      <label>Title (for your reference and YouTube)<input name="title"></label>
+      <label>Caption (used for the reposts; you can edit it later)<textarea name="caption"></textarea></label>
+      <div><label>Which platforms was it posted on?</label><div class="row">${plats.map(p =>
+        `<label style="flex:0 0 auto;color:var(--ink)"><input type="checkbox" name="plat" value="${p}" ${p==="instagram"?"checked":""} style="width:auto"> ${p}</label>`).join("")}</div></div>
+      <div style="margin-top:8px"><label>Which steps have you already done?</label>
+        <table id="impplan">${steps.map(st => `<tr><td><input type="checkbox" name="done" value="${st.name}" ${st.name==="feed"?"checked":""} style="width:auto"></td>
+          <td>${esc(st.label)}${st.trial?' <span class="pill dry">trial</span>':""}</td><td class="muted" data-due="${st.day}"></td></tr>`).join("")}</table></div>
+      <label style="color:var(--ink);margin-top:8px"><input type="checkbox" name="has_text" checked style="width:auto"> The reel has captions or text on screen</label>
+      <label>Clean copy without on-screen text (optional: lets the app make a readable mirrored version and fresh re-edits)
+        <input type="file" name="clean" accept="video/*"></label>
+      <div style="margin-top:8px"><label>Steps whose date has already passed:</label>
+        <label style="color:var(--ink)"><input type="radio" name="missed" value="skip" checked style="width:auto"> Skip them</label>
+        <label style="color:var(--ink)"><input type="radio" name="missed" value="now" style="width:auto"> Post them as soon as possible</label></div>
+      <label style="color:var(--ink);margin-top:8px"><input type="checkbox" name="auto_repost" checked style="width:auto"> Post the +90/+180 day reposts automatically (untick to review them first)</label>
+      <div class="row" style="margin-top:12px"><button class="btn approve" type="submit">Import and schedule</button></div>
+    </form><div id="impresult" style="margin-top:12px"></div></div>`;
+  const form = $("#imp", v);
+  const updateDue = () => {
+    const base = new Date(form.posted_at.value);
+    form.querySelectorAll("[data-due]").forEach(td => {
+      const days = Number(td.dataset.due), d = new Date(base); d.setDate(d.getDate() + days);
+      const end = days ? new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1) : new Date(d.getTime() + 864e5);
+      const repost = td.parentElement.querySelector("[name=done]").value.startsWith("repost_");
+      const note = end < new Date() ? (repost ? " (overdue: reposted at the next daily run unless ticked)" : " (date passed)") : "";
+      td.textContent = `day ${days + 1}: ` + d.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric", year:"numeric"}) + note;
+    });
+  };
+  form.posted_at.oninput = updateDue; updateDue();
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData();
+    fd.append("video", form.video.files[0]);
+    if (form.clean.files[0]) fd.append("clean", form.clean.files[0]);
+    fd.append("posted_at", new Date(form.posted_at.value).toISOString());   // exact moment, with time zone
+    fd.append("title", form.title.value); fd.append("caption", form.caption.value);
+    fd.append("platforms", [...form.querySelectorAll("[name=plat]:checked")].map(x => x.value).join(","));
+    fd.append("done", [...form.querySelectorAll("[name=done]:checked")].map(x => x.value).join(","));
+    fd.append("has_text", form.has_text.checked); fd.append("auto_repost", form.auto_repost.checked);
+    fd.append("missed", form.querySelector("[name=missed]:checked").value);
+    const btn = form.querySelector("button"); btn.disabled = true; btn.textContent = "Uploading and importing...";
+    const out = $("#impresult", v);
+    try {
+      const r = await fetch("/api/import", {method: "POST", body: fd});
+      const j = await r.json();
+      if (!r.ok) { out.innerHTML = `<p class="s-lo">${esc(j.detail)}</p>`; return; }
+      out.innerHTML = `<b>Imported as clip ${j.clip_id}.</b> Here's its schedule:<table>${j.steps.map(st =>
+        `<tr><td>${esc(st.label)}</td><td>${esc(st.action)}</td><td>${st.at ? when(st.at) : ""}</td></tr>`).join("")}</table>
+        <p class="muted">You'll find it with countdowns in the Posted tab. Import another below.</p>`;
+      form.reset(); form.posted_at.value = localNow(); updateDue();
+    } finally { btn.disabled = false; btn.textContent = "Import and schedule"; }
+  };
 }
 window.addEventListener("hashchange", () => { current = location.hash.slice(1) || "review"; load(); });
 load();

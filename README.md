@@ -250,6 +250,29 @@ Change the steps under `cadence.steps` in `config.yaml` (which platforms, which 
 from the `reedit` section: `max_reposts: 2` stops after the second repost, and `style: same` reposts the
 original file instead of a re-edit. Set `cadence.enabled: false` to go back to one post per platform.
 
+### Reels you posted before using the app
+
+Open **Import posted reel** in the dashboard to add reels you've already posted, one at a time:
+
+1. Choose the video file (the exact reel you posted).
+2. Enter **when it was first posted**. That's day 1 of its schedule, and the form shows each step's date.
+3. Tick the platforms it went out on and the steps you've **already done** (Feed Reel is ticked by default).
+4. Choose what happens to steps whose date has already passed: **skip them** or **post them as soon as possible**.
+5. Tick **Post the +90/+180 day reposts automatically**, or untick it to review each repost first.
+
+The app records what's done, schedules what's left, and the reel then shows up in **Posted** with the same
+numbered plan and countdowns as everything else. Overdue +90/+180 reposts are picked up at the next daily run.
+
+**On-screen text.** Most finished reels have captions burned in. Flipping one for the Mirrored Trial Reel
+would make the text read backwards, so that step is skipped unless you either untick "The reel has
+captions or text on screen" or upload a **clean copy** without text. With a clean copy the app transcribes
+it, makes a properly mirrored version with fresh captions, and makes real re-edits at +90/+180 days.
+Without one, the reposts reuse the file you posted.
+
+From the command line (handy for a batch):
+`kir import my_reel.mp4 --posted "2026-09-20 18:00" --done feed,trial --platforms instagram,tiktok`
+(`--clean clean.mp4`, `--no-text`, `--missed now`, `--review` are optional).
+
 ---
 
 ## 6. Tuning with real results
@@ -293,6 +316,7 @@ All from the repo folder (`.venv\Scripts\kir ...`, or `python -m kir_clipper ...
 | `kir summary [--send]` | Print (and optionally send) the daily summary |
 | `kir perf-import <csv>` / `kir perf-report` | Performance data |
 | `kir longform list \| whole <stream> \| build <id>` | Long-form YouTube edits |
+| `kir import <file> --posted "YYYY-MM-DD HH:MM" [--done feed,trial]` | Add a reel you already posted to the schedule |
 
 ---
 

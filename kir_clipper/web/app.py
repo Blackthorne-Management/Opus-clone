@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException
+from datetime import datetime
+
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from .. import db
@@ -15,6 +18,7 @@ from ..config import Config
 from ..performance import score_report
 from ..pipeline import approve_clip, edit_clip, reject_clip
 from ..cadence import step_label, timeline
+from ..importer import cadence_steps, import_reel
 from ..scheduler import copy_for, mark_posted, next_slot
 
 log = logging.getLogger("kir.web")
@@ -49,6 +53,9 @@ def create_app(cfg: Config) -> FastAPI:
             "histogram": [sum(1 for s in scores if b * 10 <= s < b * 10 + 10) for b in range(10)],
             "performance": score_report(c),
             "manual_due": c.execute("SELECT COUNT(*) FROM posts WHERE status='manual'").fetchone()[0],
+            "cadence": [{"name": st["name"], "label": step_label(st["name"], cfg), "day": int(st.get("day", 0)),
+                         "trial": bool(st.get("trial")), "mirror": bool(st.get("mirror"))} for st in cadence_steps(cfg)]
+                       if cfg.get("cadence.enabled") else [],
         }
 
     @app.get("/api/clips")
@@ -189,6 +196,42 @@ def create_app(cfg: Config) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         return {"ok": True, "rerender": queued}
+
+    @app.post("/api/import")
+    def import_upload(video: UploadFile = File(...), clean: UploadFile | None = File(None),
+                      posted_at: str = Form(...), title: str = Form(""), caption: str = Form(""),
+                      platforms: str = Form("instagram"), done: str = Form("feed"), has_text: bool = Form(True),
+                      missed: str = Form("skip"), auto_repost: bool = Form(True)):
+        tmp = cfg.subdir("imports") / "incoming"
+        tmp.mkdir(parents=True, exist_ok=True)
+        saved = []
+        try:
+            for up in (video, clean):
+                if up is None or not up.filename:
+                    saved.append(None)
+                    continue
+                dest = tmp / Path(up.filename).name
+                with open(dest, "wb") as fh:
+                    shutil.copyfileobj(up.file, fh, 8 * 1024 * 1024)
+                saved.append(dest)
+            try:
+                when = datetime.fromisoformat(posted_at.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(400, "Pick the date (and time) the reel was first posted")
+            try:
+                result = import_reel(cfg, conn(), saved[0], when, title=title, caption=caption,
+                                     platforms=[p for p in platforms.split(",") if p], done_steps=[d for d in done.split(",") if d],
+                                     has_text=has_text, clean=saved[1], missed=missed, auto_repost=auto_repost)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+            except RuntimeError as exc:
+                log.exception("Import failed")
+                raise HTTPException(400, f"Couldn't read that video: {exc}")
+            return result
+        finally:
+            for f in saved:
+                if f is not None:
+                    f.unlink(missing_ok=True)
 
     @app.get("/api/events")
     def events(limit: int = 100):

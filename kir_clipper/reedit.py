@@ -176,6 +176,10 @@ def run_reedit(cfg: Config, conn, llm=None, now: datetime | None = None, rng: ra
 def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
     lineage = [db.clip_dict(c) for c in cand["lineage"]]
     root = next(c for c in lineage if c["id"] == cand["root_id"])
+    imported = (root.get("recipe") or {}).get("imported")
+    if cfg.get("reedit.style", "reedit") == "same" or (imported and not root["recipe"].get("clean")):
+        # Imported reels without a clean copy already have captions burned in: repost the file as posted.
+        return _repost_same(cfg, conn, root, lineage)
     stream = conn.execute("SELECT * FROM streams WHERE id=?", (root["stream_id"],)).fetchone()
     source = Path(stream["file_path"])
     if not source.exists():
@@ -183,9 +187,6 @@ def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
     transcript = json.loads((cfg.subdir("transcripts") / f"{stream['hash']}.json").read_text(encoding="utf-8"))
     words = clip_words(transcript["words"], root["start"], root["end"])
     text = " ".join(w["w"] for w in words)
-
-    if cfg.get("reedit.style", "reedit") == "same":
-        return _repost_same(cfg, conn, root, lineage)
 
     previous_recipes = [c["recipe"] for c in lineage if c.get("recipe")]
     previous_copy = [{"hook": c["hook"], "hook_overlay": (c.get("recipe") or {}).get("hook_text"), "title": c["title"]}
@@ -208,8 +209,7 @@ def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
     clip_id = db.insert_clip(conn, root["stream_id"], clip, "pending", recipe, parent_clip_id=root["id"], version=version)
     out = cfg.subdir("clips") / f"stream_{root['stream_id']:04d}" / f"clip_{root['id']:05d}_v{version}.mp4"
     render_clip(cfg, source, clip, words, recipe, out)
-    decision = gate(clip["score"], cfg)
-    status = "review" if decision != "auto" else ("dry_run" if cfg.dry_run else "approved")
+    status = _repost_status(cfg, root, clip["score"])
     db.update_clip(conn, clip_id, status=status, file_path=str(out))
     db.log_event(conn, "clip_reedited", clip_id, {"root": root["id"], "version": version, "recipe": recipe})
     log.info("Re-edit v%d of clip %s -> clip %s (%s, %s captions, %s crop, %s zoom)", version, root["id"], clip_id,
@@ -227,11 +227,19 @@ def _repost_same(cfg: Config, conn, root: dict, lineage: list[dict]) -> int:
     clip["reason"] = f"repost {version - 1} of clip {root['id']}"
     clip_id = db.insert_clip(conn, root["stream_id"], clip, "pending", root.get("recipe"),
                              parent_clip_id=root["id"], version=version)
-    decision = gate(clip["score"], cfg)
-    status = "review" if decision != "auto" else ("dry_run" if cfg.dry_run else "approved")
+    status = _repost_status(cfg, root, clip["score"])
     db.update_clip(conn, clip_id, status=status, file_path=root["file_path"])
     db.log_event(conn, "clip_reposted", clip_id, {"root": root["id"], "version": version})
     if status == "approved":
         from .cadence import plan_clip
         plan_clip(cfg, conn, clip_id)
     return clip_id
+
+
+def _repost_status(cfg: Config, root: dict, score: int) -> str:
+    """Imported reels have no score: they follow the owner's 'repost automatically' choice."""
+    recipe = root.get("recipe") or {}
+    auto = recipe.get("auto_repost", False) if recipe.get("imported") else gate(score, cfg) == "auto"
+    if not auto:
+        return "review"
+    return "dry_run" if cfg.dry_run else "approved"

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS streams (
     file_path TEXT NOT NULL,          -- current location (processed/ after success)
     original_path TEXT NOT NULL,      -- where it was found in the inbox
     hash TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'stream',  -- stream | import (a reel you posted before using the app)
     duration REAL,
     status TEXT NOT NULL DEFAULT 'new',   -- new | processing | done | failed
     error TEXT,
@@ -139,6 +140,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
     if cols and "kind" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN kind TEXT NOT NULL DEFAULT 'short'")
+    scols = {r["name"] for r in conn.execute("PRAGMA table_info(streams)")}
+    if scols and "kind" not in scols:
+        conn.execute("ALTER TABLE streams ADD COLUMN kind TEXT NOT NULL DEFAULT 'stream'")
     pcols = {r["name"] for r in conn.execute("PRAGMA table_info(posts)")}
     for name, ddl in (("step", "TEXT"), ("trial", "INTEGER NOT NULL DEFAULT 0"), ("file_path", "TEXT")):
         if pcols and name not in pcols:

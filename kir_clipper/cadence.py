@@ -56,6 +56,22 @@ def render_variant(cfg: Config, conn, clip: dict, changes: dict, suffix: str) ->
     return out
 
 
+def schedule_step(cfg: Config, conn, clip_id: int, name: str, platforms: list[str], now: datetime,
+                  not_before: datetime | None = None, trial: bool = False, file_path: str | None = None) -> list[tuple[int, datetime]]:
+    """Put one cadence step on the calendar for each platform (skipping platforms it is already on)."""
+    existing = {r["platform"] for r in conn.execute(
+        "SELECT platform FROM posts WHERE clip_id=? AND step=? AND status NOT IN ('cancelled','failed')", (clip_id, name))}
+    out = []
+    for platform in platforms:
+        if platform in existing:
+            continue
+        when = next_slot(conn, cfg, platform, now, not_before=not_before, trial=trial)
+        out.append((db.insert_post(conn, clip_id, platform, when, step=name, trial=trial, file_path=file_path), when))
+        log.info("Clip %s step %s on %s%s at %s", clip_id, name, platform, " (trial)" if trial else "",
+                 when.astimezone(_tz(cfg)).strftime("%a %d %b %H:%M"))
+    return out
+
+
 def _local_midnight(dt: datetime, tz: ZoneInfo, plus_days: int) -> datetime:
     d = dt.astimezone(tz).date() + timedelta(days=plus_days)
     return datetime.combine(d, time(0, 0), tzinfo=tz)
@@ -101,15 +117,11 @@ def plan_clip(cfg: Config, conn, clip_id: int, now: datetime | None = None) -> l
             not_before = (last_same_day + timedelta(minutes=1)) if last_same_day else None
         else:
             not_before = _local_midnight(anchor or now, tz, day)
-        times = []
-        for platform in step.get("platforms") or cfg.get("publishing.platforms") or []:
-            if (name, platform) in existing:
-                continue
-            when = next_slot(conn, cfg, platform, now, not_before=not_before, trial=trial)
-            ids.append(db.insert_post(conn, clip_id, platform, when, step=name, trial=trial, file_path=file_path))
-            times.append(when)
-            log.info("Clip %s step %s on %s%s at %s", clip_id, name, platform, " (trial)" if trial else "",
-                     when.astimezone(tz).strftime("%a %d %b %H:%M"))
+        platforms = [p for p in (step.get("platforms") or cfg.get("publishing.platforms") or [])
+                     if (name, p) not in existing]
+        made = schedule_step(cfg, conn, clip_id, name, platforms, now, not_before, trial, file_path)
+        ids += [i for i, _ in made]
+        times = [t for _, t in made]
         if times:
             anchor = anchor or min(times)
             if day == 0:
