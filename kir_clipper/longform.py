@@ -699,6 +699,11 @@ def build(cfg: Config, conn, lf_id: int, llm=None) -> int:
                                                               "reason": "long-form edit", **fields},
                                      "review", kind="longform")
             db.update_clip(conn, clip_id, file_path=str(out))
+        if cfg.get("thumbnails.enabled", True) and not plan.get("thumbnails"):
+            try:
+                make_thumbnails(cfg, plan, out.parent, f"part{row['idx']}_lf{lf_id}", llm)
+            except Exception:
+                log.exception("Thumbnail generation failed for long-form %s (the video is fine)", lf_id)
         db.update_longform(conn, lf_id, status="ready", plan_json=plan, clip_id=clip_id)
         db.log_event(conn, "longform_rendered", lf_id, {"file": str(out), **{k: v for k, v in info.items()
                                                                              if k != "chapters"}})
@@ -711,6 +716,24 @@ def build(cfg: Config, conn, lf_id: int, llm=None) -> int:
         db.update_longform(conn, lf_id, status="failed", error=str(exc)[:1000])
         notify(cfg, "Long-form edit failed", f"Stream {row['stream_id']} part {row['idx']}: {exc}", level="alert")
         raise
+
+
+def make_thumbnails(cfg: Config, plan: dict, out_dir: Path, stem: str, llm=None) -> list[dict]:
+    """Generate thumbnail options into plan['thumbnails'] (first one selected)."""
+    from . import thumbnails
+    if llm is None:
+        from .llm import ClaudeJSON
+        llm = ClaudeJSON(cfg)
+    previous = [t["text"] for t in plan.get("thumbnails", [])]
+    chapters = [c["title"] for c in (plan.get("render") or {}).get("chapters", [])] or \
+               [c["title"] for c in plan.get("chapters", [])]
+    version = 1 + len(plan.get("thumbnail_history", []))
+    made = thumbnails.generate(cfg, llm, plan.get("meta", {}), chapters, out_dir, f"{stem}_v{version}", avoid=previous)
+    if plan.get("thumbnails"):
+        plan.setdefault("thumbnail_history", []).append(plan["thumbnails"])
+    plan["thumbnails"] = made
+    plan["thumbnail_choice"] = 0
+    return made
 
 
 def worker_tick(cfg: Config, conn, llm=None) -> int | None:

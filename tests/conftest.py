@@ -51,6 +51,12 @@ class FakeLLM:
                     "lower_thirds": [{"idx": a + 1, "title": "Discipline", "subtitle": "Why motivation fades"}],
                     "popups": [{"idx": a + 4, "text": "Motivation is a feeling, discipline is a decision today"}],
                     "zooms": [{"idx": a + 6}]}
+        if "concepts" in props:  # thumbnail concepts
+            return {"concepts": [
+                {"text": "STOP WAITING", "emphasis": "WAITING", "layout": "split", "expression": "", "accent": "arrow", "why": "a"},
+                {"text": "BROKE TO $10K", "emphasis": "$10K", "layout": "spotlight", "expression": "", "accent": "money", "why": "b"},
+                {"text": "YOU VS YOU", "emphasis": "VS", "layout": "versus", "expression": "", "accent": "check_x", "why": "c"},
+            ]}
         if set(props) == {"title", "description", "tags"}:
             return {"title": "Full stream: discipline", "description": "We talk discipline.", "tags": ["#kir", "mindset"]}
         if schema is CANDIDATE_SCHEMA:

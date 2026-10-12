@@ -217,6 +217,11 @@ def publish_tick(conn, cfg: Config, publisher, now: datetime | None = None) -> d
             db.update_post(conn, post["id"], status="posted", posted_at=db.iso(now),
                            platform_post_id=st.platform_post_id or st.url)
             db.log_event(conn, "post_live", post["id"], {"platform": post["platform"], "url": st.url})
+            clip_row = db.get_clip(conn, post["clip_id"])
+            if clip_row and clip_row["kind"] == "longform" and cfg.get("thumbnails.enabled", True):
+                notify(cfg, f"Long-form video is live: {clip_row['title']}",
+                       f"Set its thumbnail in YouTube Studio (Content > the video > Thumbnail > Upload). "
+                       f"Download the one you picked from {dashboard_url(cfg, 'longform')}" + (f"\n{st.url}" if st.url else ""))
             stats["posted"] += 1
             _refresh_clip_status(conn, post["clip_id"])
         elif st.state == "failed":

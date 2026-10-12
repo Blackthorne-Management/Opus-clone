@@ -178,3 +178,21 @@ dashboard:
   # Requires a PIN; the PC must allow the connection through Windows Firewall the first time.
   lan_access: false
   pin: ""                      # 4+ digits, e.g. "4821". Only asked on devices other than this PC.
+
+# YouTube thumbnails for long-form videos: designed from scratch in one consistent channel theme.
+# Put cut-out photos of yourself (transparent PNG, named by expression: shocked.png, serious.png,
+# pointing.png, smiling.png, thinking.png...) in brand/thumbnail/person/. Plain photos work too if
+# you install the optional background remover: pip install rembg
+thumbnails:
+  enabled: true
+  count: 3
+  person_dir: brand/thumbnail/person
+  font: ""                    # blank = bundled Anton (brand/fonts/thumbnail), then Impact
+  logo: true
+  palette:
+    primary: "#E11D2E"        # red
+    secondary: "#1D4ED8"      # blue
+    dark: "#0B1026"
+    text: "#FFFFFF"
+    highlight: "#FFD400"      # the one yellow word
+    outline: "#000000"

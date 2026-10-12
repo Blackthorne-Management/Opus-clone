@@ -193,6 +193,19 @@ def cmd_import(args) -> int:
     return 0
 
 
+def cmd_thumbnails(args) -> int:
+    """Preview the thumbnail theme: Claude writes concepts for a made-up title and they're rendered."""
+    from .llm import ClaudeJSON
+    from .thumbnails import generate
+    cfg, _ = _ctx(args)
+    out = cfg.subdir("thumbnail_previews")
+    made = generate(cfg, ClaudeJSON(cfg), {"title": args.title, "description": args.description or ""}, [],
+                    out, "preview_" + db.utcnow().strftime("%Y%m%d%H%M%S"), count=args.count)
+    for t in made:
+        print(f"{t['path']}\n   {t['text']}  ({t['layout']}, {t['accent']}) - {t['why']}")
+    return 0
+
+
 def cmd_run(args) -> int:
     """Everything in one long-running process: watcher, publisher loop, daily jobs, dashboard."""
     import uvicorn
@@ -336,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--missed", choices=["skip", "now"], default="skip", help="steps whose date has passed")
     s.add_argument("--review", action="store_true", help="review reposts instead of posting them automatically")
     s.set_defaults(fn=cmd_import)
+    s = sub.add_parser("thumbnails", help="preview the YouTube thumbnail theme for a title")
+    s.add_argument("--title", required=True)
+    s.add_argument("--description")
+    s.add_argument("--count", type=int, default=3)
+    s.set_defaults(fn=cmd_thumbnails)
     s = sub.add_parser("longform", help="long-form YouTube edits: list | build <longform id> | whole <stream id>")
     s.add_argument("action", choices=["list", "build", "whole"])
     s.add_argument("id", type=int, nargs="?")

@@ -304,6 +304,13 @@ function lfCard(s) {
     <label>Description (chapters are added automatically)<textarea data-f="description" style="min-height:110px" ${locked?"disabled":""}>${esc(m.description)}</textarea></label>
     <label>Tags<input data-f="tags" value="${esc((m.tags||[]).join(", "))}" ${locked?"disabled":""}></label>
     ${r ? `<details><summary>Chapters</summary><pre>${esc(r.chapters.map(c => hms(c.t)+" "+c.title).join("\n"))}</pre></details>` : ""}
+    ${s.thumbnails && s.thumbnails.length ? `<div><b style="font-size:13px">Thumbnail</b> <span class="muted">(pick one; set it in YouTube Studio after it posts)</span>
+      <div class="row" style="margin-top:6px">${s.thumbnails.map((t, i) => `<label style="flex:1;min-width:200px;color:var(--ink);cursor:pointer">
+        <img src="/media/thumb/${s.id}/${i}?v=${encodeURIComponent(t.text)}" alt="${esc(t.text)}" style="width:100%;border-radius:6px;outline:${i===s.thumbnail_choice?"4px solid var(--ok)":"1px solid var(--line)"}">
+        <span style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="radio" name="thumb${s.id}" data-thumb="${i}" ${i===s.thumbnail_choice?"checked":""} style="width:auto">
+        <span class="muted">${esc(t.why)}</span></span></label>`).join("")}</div>
+      <div class="row" style="margin-top:6px"><a class="btn plain" href="/media/thumb/${s.id}/${s.thumbnail_choice}?download=1" download style="text-align:center">Download chosen thumbnail</a>
+        <button class="btn plain" data-a="lfthumbs">Make 3 new options</button></div></div>` : ""}
     <details ${s.cuts.length?"open":""}><summary>Cuts (${s.cuts.filter(c=>c.enabled).length} of ${s.cuts.length} applied; untick to keep that part)</summary>${cuts || '<p class="muted">No cuts suggested.</p>'}</details>
     <details><summary>Pop-ups (${s.popups.length})</summary>${pops || '<p class="muted">None.</p>'}</details>
     <div class="row" style="margin-top:8px">
@@ -351,10 +358,14 @@ async function renderLongform(v) {
   // review cards
   v.querySelectorAll("[data-lf]").forEach(card => {
     const id = card.dataset.lf, clip = card.dataset.clip;
+    card.querySelectorAll("[data-thumb]").forEach(r => r.onchange = async () => {
+      await api(`/api/longform/${id}/thumbnail`, {choice: Number(r.dataset.thumb)}); toast("Thumbnail chosen"); load();
+    });
     card.querySelectorAll("button[data-a]").forEach(b => b.onclick = async () => {
       b.disabled = true;
       try {
         const a = b.dataset.a;
+        if (a === "lfthumbs") { b.textContent = "Designing..."; await api(`/api/longform/${id}/thumbnail`, {regenerate: true}); toast("New thumbnail options ready"); }
         if (a === "lfsave") await api(`/api/longform/${id}/edit`, lfChanges(card));
         if (a === "lfrender") await api(`/api/longform/${id}/edit`, {...lfChanges(card), rerender: true});
         if (a === "lfreplan") { if (!confirm("Ask Claude to plan this edit again from scratch?")) return; await api(`/api/longform/${id}/edit`, {rerender: true, replan: true}); }

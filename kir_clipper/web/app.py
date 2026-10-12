@@ -245,6 +245,8 @@ def create_app(cfg: Config) -> FastAPI:
                 d["cuts"] = plan.get("cuts", [])
                 d["popups"] = plan.get("popups", [])
                 d["meta"] = plan.get("meta", {})
+                d["thumbnails"] = [{k: t[k] for k in ("text", "why", "layout")} for t in plan.get("thumbnails", [])]
+                d["thumbnail_choice"] = plan.get("thumbnail_choice", 0)
                 d["render"] = plan.get("render")
                 d["clip"] = dict(db.get_clip(c, r["clip_id"])) if r["clip_id"] else None
                 segs.append(d)
@@ -263,6 +265,40 @@ def create_app(cfg: Config) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         return {"ok": True, "ids": ids}
+
+    @app.get("/media/thumb/{lf_id}/{n}")
+    def thumb_media(lf_id: int, n: int, download: int = 0):
+        row = conn().execute("SELECT plan_json FROM longform WHERE id=?", (lf_id,)).fetchone()
+        thumbs = (json.loads(row["plan_json"] or "{}") if row else {}).get("thumbnails", [])
+        if not 0 <= n < len(thumbs) or not Path(thumbs[n]["path"]).exists():
+            raise HTTPException(404)
+        path = Path(thumbs[n]["path"])
+        return FileResponse(path, media_type="image/jpeg", filename=path.name if download else None)
+
+    @app.post("/api/longform/{lf_id}/thumbnail")
+    def longform_thumbnail(lf_id: int, body: dict = Body(...)):
+        from ..longform import make_thumbnails
+        c = conn()
+        row = c.execute("SELECT * FROM longform WHERE id=?", (lf_id,)).fetchone()
+        if not row or not row["plan_json"]:
+            raise HTTPException(404)
+        plan = json.loads(row["plan_json"])
+        if body.get("regenerate"):
+            stream = c.execute("SELECT id FROM streams WHERE id=?", (row["stream_id"],)).fetchone()
+            out_dir = cfg.subdir("longform") / f"stream_{stream['id']:04d}"
+            try:
+                make_thumbnails(cfg, plan, out_dir, f"part{row['idx']}_lf{lf_id}")
+            except Exception as exc:
+                log.exception("Thumbnail regeneration failed")
+                raise HTTPException(500, f"Couldn't make new thumbnails: {exc}")
+        elif body.get("choice") is not None:
+            n = int(body["choice"])
+            if not 0 <= n < len(plan.get("thumbnails", [])):
+                raise HTTPException(400, "No such thumbnail")
+            plan["thumbnail_choice"] = n
+        db.update_longform(c, lf_id, plan_json=plan)
+        db.log_event(c, "thumbnail_changed", lf_id, {k: body[k] for k in body})
+        return {"ok": True, "thumbnails": plan.get("thumbnails", []), "choice": plan.get("thumbnail_choice", 0)}
 
     @app.post("/api/longform/{lf_id}/edit")
     def longform_edit(lf_id: int, body: dict = Body(...)):
