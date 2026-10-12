@@ -167,3 +167,14 @@ cadence:
   #   skip   - don't make trial reels at all
   trial_mode: manual
   trial_api_fields: {}        # e.g. {instagram_trial_reel: "true", instagram_graduation_strategy: "SS_PERFORMANCE"}
+
+maintenance:
+  keep_backups: 14             # daily database backups kept in kir-data\backups
+  min_free_gb: 20              # warn when free disk space drops below this
+
+dashboard:
+  port: 8765
+  # Open the dashboard from your phone on the same Wi-Fi (needed to post Trial Reels from the Instagram app).
+  # Requires a PIN; the PC must allow the connection through Windows Firewall the first time.
+  lan_access: false
+  pin: ""                      # 4+ digits, e.g. "4821". Only asked on devices other than this PC.

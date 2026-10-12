@@ -60,8 +60,8 @@ def _store(src: Path, folder: Path, file_hash: str) -> Path:
 
 def import_reel(cfg: Config, conn, video: Path, posted_at: datetime, *, title: str = "", caption: str = "",
                 platforms: list[str] | None = None, done_steps: list[str] | None = None, has_text: bool = True,
-                clean: Path | None = None, missed: str = "skip", auto_repost: bool = True,
-                transcriber=None, now: datetime | None = None) -> dict:
+                clean: Path | None = None, clean_start: float | None = None, clean_end: float | None = None,
+                missed: str = "skip", auto_repost: bool = True, transcriber=None, now: datetime | None = None) -> dict:
     """Returns {"clip_id", "steps": [{name, label, action, at}]} describing what happened to each step."""
     from .cadence import step_label
 
@@ -88,14 +88,41 @@ def import_reel(cfg: Config, conn, video: Path, posted_at: datetime, *, title: s
         source_hash, source_info = clean_hash, media.probe(source)
     if db.stream_by_hash(conn, source_hash):
         raise ValueError("This reel has already been imported")
+    start, end = 0.0, round(source_info["duration"], 3)
+    if clean and (clean_start is not None or clean_end is not None):
+        # Only part of the raw footage was used in the posted reel.
+        start = max(0.0, float(clean_start or 0.0))
+        end = min(end, float(clean_end)) if clean_end else end
+        if end - start < 3:
+            raise ValueError("The part of the clean copy to use must be at least 3 seconds long")
 
     stream_id = db.insert_stream(conn, source, source_hash)
+    try:
+        return _import_body(cfg, conn, stream_id, video, posted_file, source, source_hash, source_info, info,
+                            start, end, posted_at, title, caption, platforms, done, has_text, clean, missed,
+                            auto_repost, transcriber, now, video_hash)
+    except Exception:
+        # Leave nothing half-imported, so fixing the problem and retrying works.
+        clip_ids = [r["id"] for r in conn.execute("SELECT id FROM clips WHERE stream_id=?", (stream_id,))]
+        for cid in clip_ids:
+            conn.execute("DELETE FROM posts WHERE clip_id=?", (cid,))
+        conn.execute("DELETE FROM clips WHERE stream_id=? AND parent_clip_id IS NOT NULL", (stream_id,))
+        conn.execute("DELETE FROM clips WHERE stream_id=?", (stream_id,))
+        conn.execute("DELETE FROM streams WHERE id=?", (stream_id,))
+        conn.execute("DELETE FROM events WHERE kind='reel_imported' AND detail LIKE ?", (f'%"{video_hash}"%',))
+        raise
+
+
+def _import_body(cfg, conn, stream_id, video, posted_file, source, source_hash, source_info, info, start, end,
+                 posted_at, title, caption, platforms, done, has_text, clean, missed, auto_repost, transcriber, now,
+                 video_hash) -> dict:
+    from .cadence import step_label
     db.update_stream(conn, stream_id, kind="import", status="done", duration=source_info["duration"],
                      original_path=str(video), processed_at=db.iso(now))
     if clean:
         transcribe(cfg, source, source_hash, source_info["duration"], backend=transcriber)
 
-    clip = {"start": 0.0, "end": round(source_info["duration"], 3), "score": 0, "hook": title or video.stem,
+    clip = {"start": start, "end": end, "score": 0, "hook": title or video.stem,
             "reason": "imported reel", "title": title or video.stem, "caption": caption, "hashtags": []}
     recipe = {**default_recipe(cfg, clip), "imported": True, "has_text": has_text, "clean": bool(clean),
               "auto_repost": auto_repost}
@@ -159,4 +186,8 @@ def import_reel(cfg: Config, conn, video: Path, posted_at: datetime, *, title: s
             report.append({**entry, "action": "scheduled", "at": db.iso(min(t for _, t in made))})
     db.log_event(conn, "import_planned", clip_id, report)
     log.info("Imported reel %s as clip %s: %s", video.name, clip_id, [(r["name"], r["action"]) for r in report])
-    return {"clip_id": clip_id, "steps": report}
+    warnings = []
+    if clean and abs((end - start) - info["duration"]) > 2:
+        warnings.append(f"The clean copy section is {end - start:.0f}s but the posted reel is {info['duration']:.0f}s. "
+                        "Reposts and the mirrored version will use the clean copy section as given.")
+    return {"clip_id": clip_id, "steps": report, "warnings": warnings}

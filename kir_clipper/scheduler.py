@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from . import db
 from .config import Config
+from .maintenance import dashboard_url
 from .notify import notify
 from .publishers import DryRunPublisher, PublishError
 
@@ -170,8 +171,8 @@ def publish_tick(conn, cfg: Config, publisher, now: datetime | None = None) -> d
                 db.update_post(conn, post["id"], status="manual")
                 db.log_event(conn, "post_manual_due", post["id"], {"file": post["media_path"]})
                 notify(cfg, f"Time to post a Trial Reel (clip {post['clip_id']}, {post['step']})",
-                       f"Post this as an Instagram Trial Reel, then click 'Mark posted' in the dashboard:\n"
-                       f"{post['media_path']}")
+                       f"Open {dashboard_url(cfg, 'posts')} , tap Download, post it in the Instagram app as a "
+                       f"Trial Reel, then tap 'Mark posted'.\nFile: {post['media_path']}")
                 stats["manual"] = stats.get("manual", 0) + 1
             continue
         if publish_at - now > timedelta(days=_days_ahead(cfg, post["platform"])):

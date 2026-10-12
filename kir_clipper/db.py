@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS longform (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS heartbeats (
+    name TEXT PRIMARY KEY,            -- watcher | publisher | longform
+    at TEXT NOT NULL,
+    info TEXT
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     at TEXT NOT NULL,

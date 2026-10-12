@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from . import db, media
 from .config import Config, load_config, secret
 from .logging_setup import setup_logging
+from .maintenance import lan_ip
 
 log = logging.getLogger("kir")
 
@@ -67,6 +68,12 @@ def cmd_doctor(args) -> int:
         print(f"  [--] logo not found at {cfg.resolve(logo)}: clips render without a watermark")
     for key in ("inbox", "processed", "failed", "data"):
         print(f"  [..] {key}: {cfg.path(key)}")
+    from .maintenance import free_gb
+    gb = free_gb(cfg.path("data"))
+    check(f"free disk space: {gb:.0f} GB", gb >= float(cfg.get("maintenance.min_free_gb", 20)),
+          "free up space; recordings and renders are large")
+    host, port = dashboard_bind(cfg)
+    print(f"  [..] dashboard: http://127.0.0.1:{port}" + (f"  (phone: http://{lan_ip()}:{port})" if host != "127.0.0.1" else ""))
     print(f"  [..] mode: {'DRY RUN (nothing posts)' if cfg.dry_run else 'LIVE'}")
     return 0 if ok else 1
 
@@ -94,11 +101,23 @@ def cmd_watch(args) -> int:
     return 0
 
 
+def dashboard_bind(cfg: Config, port: int | None = None) -> tuple[str, int]:
+    port = port or int(cfg.get("dashboard.port", 8765))
+    if not cfg.get("dashboard.lan_access"):
+        return "127.0.0.1", port
+    pin = str(cfg.get("dashboard.pin") or "")
+    if len(pin) < 4 or not pin.isdigit():
+        log.warning("dashboard.lan_access is on but dashboard.pin is not 4+ digits: phone access disabled")
+        return "127.0.0.1", port
+    return "0.0.0.0", port
+
+
 def cmd_serve(args) -> int:
     import uvicorn
     from .web.app import create_app
     cfg, _ = _ctx(args)
-    uvicorn.run(create_app(cfg), host="127.0.0.1", port=args.port, log_level="warning")
+    host, port = dashboard_bind(cfg, args.port)
+    uvicorn.run(create_app(cfg), host=host, port=port, log_level="warning")
     return 0
 
 
@@ -190,14 +209,21 @@ def cmd_run(args) -> int:
     stop = threading.Event()
     log.info("KIR clipper starting (%s)", "DRY RUN" if cfg.dry_run else "LIVE")
 
+    from .maintenance import beat, daily_checks
+
     work_conn = db.connect(cfg.db_path)
     watcher = InboxWatcher(cfg, lambda p: process_file(cfg, work_conn, p))
+    beat_conn = db.connect(cfg.db_path)
+    watcher.on_tick = lambda: beat(beat_conn, "watcher", inbox=str(watcher.inbox), processing=watcher.current)
     threading.Thread(target=watcher.run, name="watcher", daemon=True).start()
 
     if not args.no_dashboard:
-        server = uvicorn.Server(uvicorn.Config(create_app(cfg), host="127.0.0.1", port=args.port, log_level="warning"))
+        host, port = dashboard_bind(cfg, args.port)
+        server = uvicorn.Server(uvicorn.Config(create_app(cfg), host=host, port=port, log_level="warning"))
         threading.Thread(target=server.run, name="dashboard", daemon=True).start()
-        log.info("Dashboard: http://127.0.0.1:%d", args.port)
+        log.info("Dashboard: http://127.0.0.1:%d", port)
+        if host != "127.0.0.1":
+            log.info("Phone access (same Wi-Fi): http://%s:%d", lan_ip(), port)
 
     def publisher_loop():
         pconn = db.connect(cfg.db_path)
@@ -207,14 +233,18 @@ def cmd_run(args) -> int:
             try:
                 if not cfg.dry_run and publisher is None:
                     publisher = get_publisher(cfg)
+                if cfg.dry_run:
+                    publisher = None   # pick up a switch back to live from the Settings tab
                 stats = publish_tick(pconn, cfg, publisher)
+                beat(pconn, "publisher", mode="dry run" if cfg.dry_run else "live", last=stats)
                 if any(v for k, v in stats.items() if k != "held"):
                     log.info("Publish tick: %s", stats)
             except Exception as exc:
                 log.exception("Publish loop error")
+                beat(pconn, "publisher", mode="blocked", error=str(exc)[:200])
                 if "not set" in str(exc):
                     notify(cfg, "Posting is blocked", str(exc), level="alert")
-                    stop.wait(3600)
+                    stop.wait(600)
             stop.wait(interval)
 
     threading.Thread(target=publisher_loop, name="publisher", daemon=True).start()
@@ -224,6 +254,8 @@ def cmd_run(args) -> int:
         lconn = db.connect(cfg.db_path)
         while not stop.is_set():
             try:
+                busy = lconn.execute("SELECT COUNT(*) FROM longform WHERE status IN ('queued','planning','rendering')").fetchone()[0]
+                beat(lconn, "longform", queued=busy)
                 if worker_tick(cfg, lconn) is None:
                     stop.wait(20)
             except Exception:
@@ -245,7 +277,11 @@ def cmd_run(args) -> int:
                     run_reedit(cfg, conn)
                 except Exception:
                     log.exception("Re-edit job failed")
-                notify(cfg, "Daily summary", daily_summary(conn, cfg))
+                warnings = daily_checks(cfg)
+                summary = daily_summary(conn, cfg)
+                if warnings:
+                    summary += "\n\nNeeds attention:\n" + "\n".join(f"- {w}" for w in warnings)
+                notify(cfg, "Daily summary", summary, level="alert" if warnings else "info")
             time.sleep(60)
     except KeyboardInterrupt:
         log.info("Stopping")
@@ -260,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("run", help="run everything: watcher, posting, daily jobs, dashboard")
-    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--port", type=int, default=None)
     s.add_argument("--no-dashboard", action="store_true")
     s.add_argument("--dry-run", action="store_true", help="force dry-run mode")
     s.set_defaults(fn=cmd_run)
@@ -275,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     s.set_defaults(fn=cmd_reprocess)
     sub.add_parser("watch", help="watch the inbox only").set_defaults(fn=cmd_watch)
     s = sub.add_parser("serve", help="dashboard only")
-    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--port", type=int, default=None)
     s.set_defaults(fn=cmd_serve)
     sub.add_parser("publish", help="run one posting tick").set_defaults(fn=cmd_publish)
     s = sub.add_parser("reedit", help="run the re-edit job now")

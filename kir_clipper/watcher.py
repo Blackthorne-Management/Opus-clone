@@ -116,6 +116,8 @@ class InboxWatcher:
         self._pending: set[Path] = set()
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self.current: str | None = None           # file being processed right now (for the status bar)
+        self.on_tick: Callable[[], None] | None = None
 
     def scan(self) -> list[Path]:
         with self._lock:
@@ -134,17 +136,29 @@ class InboxWatcher:
         log.info("Watching %s (files must be unchanged for %ss)", self.inbox, self.tracker.stable_seconds)
         try:
             while not self._stop.is_set():
+                self._tick()
                 for path in self.scan():
                     log.info("Recording finished: %s", path.name)
+                    self.current = path.name
+                    self._tick()
                     try:
                         self.on_ready(path)
                     except Exception:
                         log.exception("Processing %s crashed", path)
+                    finally:
+                        self.current = None
                     self.tracker.mark_done(path)
                 self._stop.wait(self.poll)
         finally:
             observer.stop()
             observer.join(timeout=5)
+
+    def _tick(self) -> None:
+        if self.on_tick:
+            try:
+                self.on_tick()
+            except Exception:
+                log.debug("status tick failed", exc_info=True)
 
     def stop(self) -> None:
         self._stop.set()

@@ -263,6 +263,10 @@ Open **Import posted reel** in the dashboard to add reels you've already posted,
 The app records what's done, schedules what's left, and the reel then shows up in **Posted** with the same
 numbered plan and countdowns as everything else. Overdue +90/+180 reposts are picked up at the next daily run.
 
+When you pick a reel, a pop-up asks whether it has captions or text on screen and explains exactly what to do.
+If you upload a raw recording as the clean copy and it's a different length from the reel, the app asks
+where the part you used starts and ends (for example 1:05 to 1:50).
+
 **On-screen text.** Most finished reels have captions burned in. Flipping one for the Mirrored Trial Reel
 would make the text read backwards, so that step is skipped unless you either untick "The reel has
 captions or text on screen" or upload a **clean copy** without text. With a clean copy the app transcribes
@@ -272,6 +276,30 @@ Without one, the reposts reuse the file you posted.
 From the command line (handy for a batch):
 `kir import my_reel.mp4 --posted "2026-09-20 18:00" --done feed,trial --platforms instagram,tiktok`
 (`--clean clean.mp4`, `--no-text`, `--missed now`, `--review` are optional).
+
+---
+
+## 5d. Settings, phone access, and keeping it healthy
+
+**Settings tab.** Change the important options without editing files: Dry run / Live, the auto-post and
+drop scores, clips per stream, the five-times plan, posting times and daily caps, long-form on/off, and
+phone access. Changes apply immediately and are saved to `config.local.yaml`. Going live asks you to
+confirm, and refuses if the Upload-Post key isn't set yet.
+
+**Phone access (recommended for Trial Reels).** Trial Reels have to be posted from the Instagram app, but
+the files are on your PC. Turn on phone access in Settings, set a 4-8 digit PIN, and restart the app. Then
+open the address shown in Settings (like `http://192.168.1.20:8765`) on your phone while on the same Wi-Fi
+and enter the PIN. Windows may ask to allow the connection the first time: choose **Private networks**.
+Reminders for trial reels include this link. From the phone: **Post calendar → Download → post in
+Instagram → Mark posted**. Five wrong PINs lock that device out for 5 minutes. It only works on your
+home network, not over the internet.
+
+**Status bar.** Under the tabs: whether the background service is running, what's being processed,
+long-form edits in progress, if posting is blocked (and why), and free disk space.
+
+**Backups and disk space.** The database is backed up every day to `kir-data\backups` (last 14 kept).
+If free space drops below 20 GB (`maintenance.min_free_gb`), the daily summary warns you. Recordings and
+renders are large, so move old files out of `Streams\processed` now and then.
 
 ---
 
