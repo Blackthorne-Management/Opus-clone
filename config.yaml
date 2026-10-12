@@ -161,13 +161,14 @@ cadence:
     - {name: feed,           day: 0, platforms: [instagram, tiktok, youtube]}
     - {name: mirrored_trial, day: 1, platforms: [instagram], trial: true, mirror: true}
   # How trial reels go out:
-  #   manual - the app renders the file and reminds you at the scheduled time; you post it as a Trial Reel
-  #            in the Instagram app and click "Mark posted" in the dashboard (default: works today)
-  #   api    - sent through Upload-Post with the fields in trial_api_fields (confirm the field names with
-  #            Upload-Post support first; Instagram's API supports trial reels, Upload-Post's name for it is unconfirmed)
+  #   api    - automatic through Upload-Post (share_mode below). If Upload-Post ever rejects a trial reel,
+  #            that post falls back to "manual" and you get a reminder, so nothing is lost.
+  #   manual - the app renders the file and reminds you; you post it in the Instagram app and tap "Mark posted"
   #   skip   - don't make trial reels at all
-  trial_mode: manual
-  trial_api_fields: {}        # e.g. {instagram_trial_reel: "true", instagram_graduation_strategy: "SS_PERFORMANCE"}
+  # Instagram only allows trial reels on public professional accounts with 1,000+ followers.
+  trial_mode: api
+  trial_api_fields:
+    share_mode: TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED   # Instagram shares it with followers if it does well        # e.g. {instagram_trial_reel: "true", instagram_graduation_strategy: "SS_PERFORMANCE"}
 
 maintenance:
   keep_backups: 14             # daily database backups kept in kir-data\backups

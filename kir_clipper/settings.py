@@ -15,7 +15,7 @@ FIELDS: dict[str, tuple] = {
     "review.auto_reject_floor": (int, (0, 95), "Clips scoring below this are dropped"),
     "highlights.max_clips_per_stream": (int, (1, 40), "Most clips kept from one stream"),
     "cadence.enabled": (bool, None, "Post everything five times (trial, feed, mirrored trial, +90, +180)"),
-    "cadence.trial_mode": (str, ("manual", "api", "skip"), "Trial reels: post by hand, through Upload-Post, or skip"),
+    "cadence.trial_mode": (str, ("api", "manual", "skip"), "Trial reels: automatic through Upload-Post, post by hand, or skip"),
     "reedit.style": (str, ("reedit", "same"), "+90/+180 reposts: new edit each time, or the same file"),
     "reedit.max_reposts": (int, (0, 5), "How many +90-day reposts per clip"),
     "publishing.slots": (list, None, "Posting times each day (HH:MM, your time zone)"),

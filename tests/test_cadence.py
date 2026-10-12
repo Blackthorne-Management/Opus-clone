@@ -71,6 +71,7 @@ def test_five_step_plan_day_one_and_two(cfg, conn, sample_video):
 
 
 def test_manual_trial_reminds_then_mark_posted(cfg, conn, sample_video):
+    cfg.data["cadence"]["trial_mode"] = "manual"
     cid = auto_clip(cfg, conn, sample_video)
     trial = posts_by_step(conn, cid)["trial"][0]
     pub = FakePublisher()
@@ -128,3 +129,22 @@ def test_reposts_stop_after_two(cfg, conn, tmp_path):
     assert find_candidates(conn, cfg) == []
     cfg.data["reedit"]["max_reposts"] = 3
     assert [c["root_id"] for c in find_candidates(conn, cfg)] == [root]
+
+
+def test_automatic_trial_falls_back_to_manual_if_rejected(cfg, conn, sample_video):
+    assert cfg.get("cadence.trial_mode") == "api"
+    assert cfg.get("cadence.trial_api_fields") == {"share_mode": "TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED"}
+    cid = auto_clip(cfg, conn, sample_video)
+    trial = posts_by_step(conn, cid)["trial"][0]
+
+    class Rejects(FakePublisher):
+        def schedule(self, clip_path, caption, platforms, publish_at, title=None, extra=None):
+            if extra:
+                from kir_clipper.publishers import PublishError
+                raise PublishError("Upload-Post rejected the request: trial reels not available", retryable=False)
+            return super().schedule(clip_path, caption, platforms, publish_at, title)
+
+    publish_tick(conn, cfg, Rejects(), now=db.parse_iso(trial["publish_at"]) - timedelta(hours=1))
+    row = conn.execute("SELECT status, last_error FROM posts WHERE id=?", (trial["id"],)).fetchone()
+    assert row["status"] == "manual" and "trial reels not available" in row["last_error"]
+    assert "needs posting by hand" in (cfg.data_dir / "notifications.log").read_text()

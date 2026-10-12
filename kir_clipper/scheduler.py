@@ -119,6 +119,14 @@ def _days_ahead(cfg: Config, platform: str) -> int:
 
 def _fail(conn, cfg: Config, post, error: str, retryable: bool, now: datetime) -> None:
     attempts = post["attempts"] + 1
+    if post["trial"] and (not retryable or attempts >= int(cfg.get("publishing.max_attempts", 4))):
+        # Automatic trial reel didn't go through: hand it to the owner instead of dropping it.
+        db.update_post(conn, post["id"], status="manual", attempts=attempts, last_error=error, next_attempt_at=None)
+        db.log_event(conn, "trial_fallback_manual", post["id"], error)
+        notify(cfg, f"Trial Reel needs posting by hand (clip {post['clip_id']})",
+               f"Upload-Post couldn't publish it as a trial reel ({error}). Open {dashboard_url(cfg, 'posts')} , "
+               "tap Download, post it in Instagram as a Trial Reel, then tap 'Mark posted'.", level="alert")
+        return
     backoff = cfg.get("publishing.retry_backoff_minutes") or [5, 20, 60]
     max_attempts = int(cfg.get("publishing.max_attempts", 4))
     if not retryable or attempts >= max_attempts:

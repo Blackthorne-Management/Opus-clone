@@ -453,7 +453,7 @@ const SETTING_GROUPS = [
   ["Long-form YouTube", ["longform.enabled"]],
   ["Phone access", ["dashboard.lan_access", "dashboard.pin"]],
 ];
-const CHOICE_LABELS = {manual: "Post by hand (reminder)", api: "Through Upload-Post", skip: "Don't make trial reels",
+const CHOICE_LABELS = {manual: "Post by hand (reminder)", api: "Automatic (Upload-Post)", skip: "Don't make trial reels",
   reedit: "New edit each time", same: "Same file"};
 async function renderSettings(v) {
   const data = await api("/api/settings"), f = data.fields;
