@@ -1,0 +1,227 @@
+# KIR Auto-Clipper configuration.
+# Paths may use ~ (your Windows user folder, e.g. C:\Users\Rael). Forward or back slashes both work.
+# Put machine-specific overrides in config.local.yaml (same keys, git-ignored).
+
+paths:
+  inbox: ~/Streams/inbox          # OBS recording output folder (or point OBS here)
+  processed: ~/Streams/processed  # originals are moved here after processing, never deleted
+  failed: ~/Streams/failed        # sources that errored are moved here for inspection
+  data: ~/Streams/kir-data        # database, transcripts, rendered clips, logs
+
+watcher:
+  extensions: [".mp4", ".mkv", ".mov", ".flv"]
+  stable_seconds: 60        # file size must be unchanged this long before processing
+  poll_seconds: 10          # how often to re-check pending files
+  remux_mkv: false          # .flv is always remuxed to .mp4; set true to also remux .mkv (stream copy, uses extra disk)
+
+transcription:
+  backend: faster-whisper   # faster-whisper (local) | openai (Whisper API)
+  model: large-v3           # faster-whisper model; use "medium" or "small" on CPU
+  device: auto              # auto | cuda | cpu
+  compute_type: auto        # auto picks float16 on GPU, int8 on CPU
+  language: en
+  chunk_minutes: 20         # audio is transcribed in chunks so 3-hour streams stay in memory
+  overlap_seconds: 20
+
+llm:
+  model: claude-opus-5-5
+  effort: medium            # low | medium | high
+  window_minutes: 25        # transcript is analysed in windows of this length
+  window_overlap_minutes: 3
+  max_retries: 4
+
+highlights:
+  criteria_file: virality_criteria.md
+  min_seconds: 20
+  max_seconds: 90
+  preferred_min_seconds: 30
+  preferred_max_seconds: 60
+  max_clips_per_stream: 12
+  overlap_dedupe_ratio: 0.5      # >50% overlap keeps the higher score
+  snap_silence_seconds: 0.35     # gap that counts as a natural pause for boundary snapping
+  lead_in_seconds: 0.15          # tiny padding before first word
+  tail_seconds: 0.45             # padding after last word
+
+review:
+  dry_run: true             # log-only mode: score + render, post nothing. Turn off after tuning.
+  auto_post_threshold: 90   # >= this posts automatically
+  auto_reject_floor: 60     # < this is dropped and logged, never queued
+  render_rejected: false    # set true to render dropped clips anyway (useful during tuning)
+
+render:
+  width: 1080
+  height: 1920
+  encoder: auto             # auto | h264_nvenc | libx264
+  crf: 20                   # quality for libx264 (lower = better)
+  nvenc_cq: 23              # quality for NVENC
+  audio_bitrate: 192k
+  default_recipe:
+    caption_style: bold_pop
+    crop_mode: face          # face | center | blur_pad
+    zoom: punch              # none | punch | slow_push
+    hook_overlay: true
+    outro_cta: true
+
+brand:
+  name: Keepingit_Rael
+  font: Montserrat ExtraBold         # must be installed on Windows (or put the .ttf in brand/fonts)
+  fonts_dir: brand/fonts
+  primary_color: "#FFFFFF"
+  highlight_color: "#FFD400"
+  accent_color: "#E63946"
+  outline_color: "#000000"
+  logo: brand/logo.png               # owner's own logo only; leave missing to skip watermark
+  logo_opacity: 0.85
+  cta_text: "Follow @Keepingit_Rael for more"
+
+publishing:
+  provider: upload_post       # upload_post | dry_run
+  upload_post:
+    base_url: https://api.upload-post.com/api
+    user: kir                 # the Upload-Post profile name you connected your accounts to
+    timezone: America/New_York
+  platforms: [tiktok, instagram, youtube]
+  # Posting slots in local time. Clips are spread across these, never dumped at once.
+  slots: ["11:30", "15:30", "19:30"]
+  max_posts_per_day:
+    tiktok: 3
+    instagram: 2
+    youtube: 3
+    instagram_trial: 3        # trial reels are counted separately (they go to non-followers)
+    facebook: 2
+    x: 3
+  min_gap_minutes: 180        # minimum spacing between posts on the same platform
+  max_days_ahead:
+    tiktok: 10
+    default: 365
+  status_poll_seconds: 30     # Upload-Post asks for >= 5s
+  retry_backoff_minutes: [5, 20, 60]
+  max_attempts: 4
+
+reedit:
+  interval_days: 90           # set to 1 to test
+  max_reposts: 2              # steps 4 and 5 of the cadence: +90 days and +180 days, then stop
+  style: reedit               # reedit = new look + new hook each time; same = repost the original file
+  platforms: [instagram, tiktok, youtube]
+  max_reposts_per_week: 4
+  skip_below_median: true     # once performance data exists, skip clips that underperformed
+  severe_underperform_ratio: 0.5
+
+performance:
+  enabled: true               # fetch views/likes/etc. from Upload-Post at 1, 3, 7 and 30 days after posting
+  check_minutes: 15           # how often to look for posts that are due a snapshot
+
+logging:
+  level: INFO
+
+daily:
+  hour: 9                     # local hour for the daily summary and the re-edit job
+
+longform:
+  enabled: true
+  wait_for_segments: true      # stream waits in the dashboard until you confirm or split it into segments
+  suggest_split_gap_minutes: 3 # a silence this long is pre-filled as a suggested split point
+  platforms: [youtube]
+  width: 1920
+  height: 1080
+  fps: 30
+  window_minutes: 20           # transcript analysed in windows of this length
+  # What may be cut. The edit stays mostly intact; only these moments are removed.
+  cut_categories:
+    - distracted        # you're clearly not engaged: looking at something else, side conversation
+    - interrupted       # cut off by something (door, phone, someone walking in), restarting a thought
+    - chat_reading      # reading chat names / comments / shout-outs aloud (substantive answers are kept)
+    - tech_issue        # audio/video problems, "can you hear me", fixing OBS
+    - away              # AFK / break
+    - housekeeping      # "starting soon", stream setup, ad reads
+  min_cut_confidence: 70
+  max_cut_ratio: 0.25           # never cut more than 25% of a segment
+  tighten_pauses_over: 3.0      # pauses longer than this (seconds) are shortened...
+  keep_pause: 0.8               # ...to this long
+  chapter_min_minutes: 4
+  popup_min_gap_seconds: 90
+  lower_third_min_gap_minutes: 6
+  zoom_min_gap_seconds: 25
+  zoom_amount: 0.12
+  subscribe_reminder: true      # "Subscribe" pop-up about a third of the way in
+  watermark: true
+  intro_seconds: 4              # generated intro, unless brand/intro.mp4 exists
+  outro_seconds: 8              # generated outro, unless brand/outro.mp4 exists
+
+# "Post everything five times" (per short clip):
+#   1. Trial Reel      day 0     Instagram, shown to non-followers first
+#   2. Feed Reel       day 0     Instagram + TikTok + YouTube (a later slot than the trial)
+#   3. Mirrored Trial  day 1     Instagram, horizontally flipped picture (text stays readable)
+#   4. Feed + 90 days  day 90    handled by the re-edit job (reedit section)
+#   5. Feed + 90 days  day 180   handled by the re-edit job
+cadence:
+  enabled: true
+  steps:
+    - {name: trial,          day: 0, platforms: [instagram], trial: true}
+    - {name: feed,           day: 0, platforms: [instagram, tiktok, youtube]}
+    - {name: mirrored_trial, day: 1, platforms: [instagram], trial: true, mirror: true}
+  # How trial reels go out:
+  #   api    - automatic through Upload-Post (share_mode below). If Upload-Post ever rejects a trial reel,
+  #            that post falls back to "manual" and you get a reminder, so nothing is lost.
+  #   manual - the app renders the file and reminds you; you post it in the Instagram app and tap "Mark posted"
+  #   skip   - don't make trial reels at all
+  # Instagram only allows trial reels on public professional accounts with 1,000+ followers.
+  trial_mode: api
+  trial_api_fields:
+    share_mode: TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED   # Instagram shares it with followers if it does well        # e.g. {instagram_trial_reel: "true", instagram_graduation_strategy: "SS_PERFORMANCE"}
+
+maintenance:
+  keep_backups: 14             # daily database backups kept in kir-data\backups
+  min_free_gb: 20              # warn when free disk space drops below this
+
+dashboard:
+  port: 8765
+  # Open the dashboard from your phone on the same Wi-Fi (needed to post Trial Reels from the Instagram app).
+  # Requires a PIN; the PC must allow the connection through Windows Firewall the first time.
+  lan_access: false
+  pin: ""                      # 4+ digits, e.g. "4821". Only asked on devices other than this PC.
+
+# YouTube thumbnails for long-form videos: designed from scratch in one consistent channel theme.
+# Put cut-out photos of yourself (transparent PNG, named by expression: shocked.png, serious.png,
+# pointing.png, smiling.png, thinking.png...) in brand/thumbnail/person/. Plain photos work too if
+# you install the optional background remover: pip install rembg
+thumbnails:
+  enabled: true
+  count: 3
+  person_dir: brand/thumbnail/person
+  font: ""                    # blank = bundled Anton (brand/fonts/thumbnail), then Impact
+  logo: true
+  # AI art from Google Gemini (needs GEMINI_API_KEY in .env). About $0.07 per image at 1K, so ~$0.20 per video
+  # for 3 options. If Gemini fails or has no key, the template above is used, so thumbnails always arrive.
+  ai:
+    enabled: true
+    model: gemini-3.1-flash-image   # if Google renames it, the app finds the current image model itself
+    mode: background                # background = Gemini paints the scene, the app adds text/photo in the channel
+                                    #   style (most consistent); full = Gemini designs the whole thumbnail from your
+                                    #   photos and your recent picks as style references
+    image_size: 1K                  # 1K | 2K | 4K (bigger costs more; YouTube shows 1280x720)
+    style_refs: 2                   # full mode: how many of your recently chosen thumbnails to show as style examples
+    style: ""                       # optional: replace the built-in style description
+  palette:
+    primary: "#E11D2E"        # red
+    secondary: "#1D4ED8"      # blue
+    dark: "#0B1026"
+    text: "#FFFFFF"
+    highlight: "#FFD400"      # the one yellow word
+    outline: "#000000"
+
+# Best posting times, learned from your own results (Stats tab).
+optimize:
+  min_posts: 20               # posts with 3-day numbers needed on a platform before suggesting times
+  min_posts_per_hour: 3       # an hour needs this many posts before it's trusted
+  explore: true               # keep one slot testing a new hour next to the best one
+  auto_apply: false           # true = apply better times automatically every Monday
+
+# A/B test the on-screen hook: the Trial Reel uses hook A, the Mirrored Trial Reel hook B.
+# Both go to non-followers, so after a few days the one with more views wins. Winners steer the
+# +90/+180 reposts and are shown to Claude as examples when it writes new hooks.
+ab_hooks:
+  enabled: true
+  decide_after_days: 3
+  min_difference: 0.15        # B must beat A (or vice versa) by 15%+ to count as a win, else a tie
+  lessons: 8                  # how many recent results to show Claude
