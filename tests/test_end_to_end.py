@@ -177,3 +177,25 @@ def test_no_api_key_in_logs_or_repo(tmp_path, monkeypatch):
         body = p.read_text(encoding="utf-8", errors="ignore")
         assert "sk-ant-api" not in body or p.name == "test_end_to_end.py", p
     assert not (ROOT / ".env").exists() or ".env" in (ROOT / ".gitignore").read_text()
+
+
+def test_faster_whisper_gets_samples_not_a_path(tmp_path, sample_video):
+    """faster-whisper must not decode files itself (its PyAV path breaks across PyAV releases)."""
+    import numpy as np
+
+    from kir_clipper.transcribe import _FasterWhisper
+
+    wav = media.extract_audio(sample_video, tmp_path / "a.wav", 0, 3)
+    seen = {}
+
+    class Model:
+        def transcribe(self, audio, **kw):
+            seen["audio"] = audio
+            return [], None
+
+    fw = _FasterWhisper.__new__(_FasterWhisper)
+    fw.model, fw.language = Model(), "en"
+    assert fw.words(wav) == []
+    audio = seen["audio"]
+    assert isinstance(audio, np.ndarray) and audio.dtype == np.float32
+    assert abs(len(audio) - 3 * 16000) < 1600 and 0 < np.abs(audio).max() <= 1.0
