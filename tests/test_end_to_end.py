@@ -97,6 +97,15 @@ def test_failed_stream_moves_to_failed_and_alerts(cfg, conn, tmp_path):
     assert "Processing failed" in (cfg.data_dir / "notifications.log").read_text()
 
 
+def test_empty_file_fails_with_a_clear_reason(cfg, conn):
+    empty = cfg.path("inbox") / "empty.mp4"
+    empty.write_bytes(b"")
+    process_file(cfg, conn, empty, llm=FakeLLM(), transcriber=FakeTranscriber())  # kir process (watcher skips 0-byte files)
+    row = conn.execute("SELECT * FROM streams").fetchone()
+    assert row["status"] == "failed" and "empty (0 bytes)" in row["error"]
+    assert (cfg.path("failed") / "empty.mp4").exists()
+
+
 def test_reedit_after_interval_renders_visibly_different_version(cfg, conn, sample_video):
     shutil.copy(sample_video, cfg.path("inbox") / "a.mp4")
     run_watcher_once(cfg, conn, FakeLLM(scores=(95,)), FakeTranscriber())

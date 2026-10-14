@@ -82,13 +82,22 @@ def process_file(cfg: Config, conn, path: Path, llm=None, transcriber=None, clai
 
     try:
         source = claimed
+        if claimed.stat().st_size == 0:
+            raise RuntimeError("The file is empty (0 bytes): the recording or export never finished. "
+                               "Use the original OBS recording, or re-export and let it finish.")
         ext = claimed.suffix.lower()
         if ext == ".flv" or (ext == ".mkv" and cfg.get("watcher.remux_mkv", False)):
             mp4 = _unique_dest(claimed.parent, claimed.stem + ".mp4")
             log.info("Remuxing %s -> %s", claimed.name, mp4.name)
             source = media.remux_to_mp4(claimed, mp4)
             db.update_stream(conn, stream_id, file_path=str(source))
-        info = media.probe(source)
+        try:
+            info = media.probe(source)
+        except RuntimeError as exc:
+            if "moov atom not found" in str(exc):
+                raise RuntimeError("This MP4 is incomplete (moov atom not found): the recording or export was cut off "
+                                   "before it finished. Use the original OBS recording, or re-export it.") from exc
+            raise
         db.update_stream(conn, stream_id, duration=info["duration"])
         if not info["has_audio"]:
             raise RuntimeError("Recording has no audio track")
