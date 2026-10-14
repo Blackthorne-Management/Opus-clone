@@ -90,7 +90,14 @@ def cmd_process(args) -> int:
     from .pipeline import process_file
     cfg, conn = _ctx(args)
     sid = process_file(cfg, conn, Path(args.file))
-    print(f"stream id: {sid}")
+    if sid is None:
+        print("Already processed (same file as an earlier stream).")
+        return 0
+    row = conn.execute("SELECT status, error FROM streams WHERE id=?", (sid,)).fetchone()
+    if row["status"] == "failed":
+        print(f"\nFAILED (stream {sid}): {row['error']}")
+        return 1
+    print(f"Done. Stream id: {sid}. Open the dashboard (kir serve) to review the clips.")
     return 0
 
 

@@ -57,8 +57,10 @@ class _FasterWhisper:
         self.language = cfg.get("transcription.language")
 
     def words(self, wav: Path) -> list[dict]:
+        # Pass decoded samples, not a path: faster-whisper's own file decoding goes through PyAV,
+        # whose releases have broken it (PyAV 19 dropped an argument it passes).
         segments, _info = self.model.transcribe(
-            str(wav), language=self.language, word_timestamps=True, vad_filter=True,
+            read_wav(wav), language=self.language, word_timestamps=True, vad_filter=True,
             condition_on_previous_text=False,
         )
         out = []
@@ -95,6 +97,15 @@ def make_backend(cfg: Config):
     if backend == "openai":
         return _OpenAIWhisper(cfg)
     return _FasterWhisper(cfg)
+
+
+def read_wav(wav: Path) -> np.ndarray:
+    """A 16 kHz mono 16-bit WAV (from media.extract_audio) as float32 samples in [-1, 1]."""
+    with wave.open(str(wav), "rb") as wf:
+        if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+            raise ValueError(f"{wav.name}: expected 16 kHz mono 16-bit audio")
+        frames = wf.readframes(wf.getnframes())
+    return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
 
 
 def loudness_track(wav: Path) -> list[float]:
