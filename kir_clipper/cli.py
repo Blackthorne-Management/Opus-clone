@@ -64,6 +64,12 @@ def cmd_doctor(args) -> int:
         try:
             import faster_whisper  # noqa: F401
             check("faster-whisper installed", True)
+            if sys.platform == "win32" and shutil.which("nvidia-smi"):
+                from .transcribe import add_nvidia_dll_dirs
+                dirs = add_nvidia_dll_dirs()
+                check("GPU transcription libraries (cuBLAS, cuDNN)",
+                      any("cublas" in d.lower() for d in dirs) and any("cudnn" in d.lower() for d in dirs),
+                      '.venv\\Scripts\\python -m pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"')
         except ImportError:
             check("faster-whisper installed", False, 'pip install -e ".[whisper]"')
     try:

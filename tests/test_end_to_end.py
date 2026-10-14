@@ -5,6 +5,7 @@ import json
 import logging
 import shutil
 from datetime import timedelta
+from pathlib import Path
 
 from kir_clipper import db, media
 from kir_clipper.config import load_config
@@ -194,8 +195,56 @@ def test_faster_whisper_gets_samples_not_a_path(tmp_path, sample_video):
             return [], None
 
     fw = _FasterWhisper.__new__(_FasterWhisper)
-    fw.model, fw.language = Model(), "en"
+    fw.model, fw.language, fw.device = Model(), "en", "cpu"
     assert fw.words(wav) == []
     audio = seen["audio"]
     assert isinstance(audio, np.ndarray) and audio.dtype == np.float32
     assert abs(len(audio) - 3 * 16000) < 1600 and 0 < np.abs(audio).max() <= 1.0
+
+
+def test_gpu_library_failure_falls_back_to_cpu(tmp_path, sample_video):
+    from kir_clipper.transcribe import _FasterWhisper
+
+    wav = media.extract_audio(sample_video, tmp_path / "a.wav", 0, 2)
+
+    class Broken:
+        def transcribe(self, audio, **kw):
+            def gen():
+                raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+                yield
+            return gen(), None
+
+    class Works:
+        def transcribe(self, audio, **kw):
+            return [], None
+
+    fw = _FasterWhisper.__new__(_FasterWhisper)
+    fw.model, fw.language, fw.device = Broken(), "en", "cuda"
+    loaded = []
+
+    def fake_load(device):
+        loaded.append(device)
+        fw.model, fw.device = Works(), device
+
+    fw._load = fake_load
+    assert fw.words(wav) == []
+    assert loaded == ["cpu"]
+
+
+def test_nvidia_dll_dirs_added_on_windows(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    from kir_clipper import transcribe
+
+    site = tmp_path / "site-packages"
+    for lib in ("cublas", "cudnn"):
+        (site / "nvidia" / lib / "bin").mkdir(parents=True)
+    added = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "path", [str(site)])
+    monkeypatch.setattr(os, "add_dll_directory", added.append, raising=False)
+    monkeypatch.setenv("PATH", "orig")
+    dirs = transcribe.add_nvidia_dll_dirs()
+    assert [Path(d).parent.name for d in dirs] == ["cublas", "cudnn"] and added == dirs
+    assert os.environ["PATH"].endswith("orig") and dirs[0] in os.environ["PATH"]

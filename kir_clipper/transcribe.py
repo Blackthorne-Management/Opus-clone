@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 import tempfile
 import wave
 from pathlib import Path
@@ -37,11 +39,50 @@ def plan_chunks(duration: float, chunk_s: float, overlap_s: float) -> list[tuple
     return chunks
 
 
+def add_nvidia_dll_dirs() -> list[str]:
+    """Windows: make pip-installed CUDA libraries (nvidia-cublas-cu12, nvidia-cudnn-cu12) loadable.
+
+    pip puts cublas64_12.dll etc. in site-packages/nvidia/*/bin, which Windows never searches, so
+    CTranslate2 fails mid-transcription with "cublas64_12.dll is not found". Add those folders to the
+    DLL search path and PATH before the model loads.
+    """
+    if sys.platform != "win32":
+        return []
+    added = []
+    for base in map(Path, sys.path):
+        nv = base / "nvidia"
+        if not nv.is_dir():
+            continue
+        for bin_dir in sorted(nv.glob("*/bin")):
+            d = str(bin_dir)
+            if d in added:
+                continue
+            try:
+                os.add_dll_directory(d)
+            except OSError:
+                continue
+            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+            added.append(d)
+    return added
+
+
+def _is_gpu_library_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(k in msg for k in ("cublas", "cudnn", "cuda", ".dll", "libcu"))
+
+
 class _FasterWhisper:
     def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.language = cfg.get("transcription.language")
+        if add_nvidia_dll_dirs():
+            log.debug("Added NVIDIA library folders to the DLL search path")
+        self._load(cfg.get("transcription.device", "auto"))
+
+    def _load(self, device: str) -> None:
         from faster_whisper import WhisperModel  # optional dependency
 
-        device = cfg.get("transcription.device", "auto")
+        cfg = self.cfg
         compute = cfg.get("transcription.compute_type", "auto")
         if device == "auto":
             try:
@@ -54,9 +95,20 @@ class _FasterWhisper:
             compute = "float16" if device == "cuda" else "int8"
         log.info("Loading faster-whisper %s on %s (%s)", cfg.get("transcription.model"), device, compute)
         self.model = WhisperModel(cfg.get("transcription.model", "large-v3"), device=device, compute_type=compute)
-        self.language = cfg.get("transcription.language")
+        self.device = device
 
     def words(self, wav: Path) -> list[dict]:
+        try:
+            return self._words(wav)
+        except RuntimeError as exc:
+            if self.device != "cuda" or not _is_gpu_library_error(exc):
+                raise
+            log.warning("GPU transcription failed (%s). Falling back to CPU for this run; it is slower. "
+                        "Fix: .venv\\Scripts\\python -m pip install nvidia-cublas-cu12 \"nvidia-cudnn-cu12==9.*\"", exc)
+            self._load("cpu")
+            return self._words(wav)
+
+    def _words(self, wav: Path) -> list[dict]:
         # Pass decoded samples, not a path: faster-whisper's own file decoding goes through PyAV,
         # whose releases have broken it (PyAV 19 dropped an argument it passes).
         segments, _info = self.model.transcribe(
