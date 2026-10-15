@@ -195,7 +195,7 @@ function renderTabs() {
   m.textContent = summary.dry_run ? "DRY RUN: nothing posts" : "LIVE: auto-posting " + summary.auto_post_threshold + "+";
 }
 function clipCard(c) {
-  const styles = ["bold_pop","karaoke","boxed","minimal"], crops = ["face","center","blur_pad"], zooms = ["none","punch","slow_push"];
+  const styles = ["hormozi","bold_pop","karaoke","boxed","minimal"], crops = ["face","center","blur_pad"], zooms = ["none","punch","slow_push"];
   const r = c.recipe || {};
   const sel = (name, opts, v) => `<select data-r="${name}">${opts.map(o => `<option ${o===v?"selected":""}>${o}</option>`).join("")}</select>`;
   const posts = c.posts.map(p => `${p.platform}: ${p.status} ${when(p.publish_at)}${p.last_error?` (${esc(p.last_error)})`:""}`).join("<br>");

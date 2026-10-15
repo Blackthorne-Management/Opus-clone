@@ -445,7 +445,7 @@ kir_clipper/
   highlights.py   pass 1 candidates → dedupe → pass 2 boundary/copy refinement → snap → cap
   llm.py          Claude structured-output calls (with server-side refusal fallback)
   render.py       ffmpeg reframe (face/center/blur-pad), zoom, watermark; recipes
-  captions.py     ASS word-by-word caption styles (bold_pop, karaoke, boxed, minimal)
+  captions.py     ASS word-by-word caption styles (hormozi [default], bold_pop, karaoke, boxed, minimal)
   scheduler.py    slot planning, caps, spacing, submit/poll/retry/alert
   publishers/     Publisher interface, Upload-Post adapter, dry-run adapter
   reedit.py       90-day lineage selection, recipe variation, copy rewrite
