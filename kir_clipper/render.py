@@ -28,7 +28,7 @@ def default_recipe(cfg: Config, clip: dict) -> dict:
     d = dict(cfg.get("render.default_recipe") or {})
     return {
         "version": 1,
-        "caption_style": d.get("caption_style", "bold_pop"),
+        "caption_style": d.get("caption_style", "hormozi"),
         "caption_position": d.get("caption_position", "lower"),
         "crop_mode": d.get("crop_mode", "face"),
         "zoom": d.get("zoom", "punch"),

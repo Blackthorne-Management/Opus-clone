@@ -56,7 +56,7 @@ render:
   nvenc_cq: 23              # quality for NVENC
   audio_bitrate: 192k
   default_recipe:
-    caption_style: bold_pop
+    caption_style: hormozi     # hormozi | bold_pop | karaoke | boxed | minimal
     crop_mode: face          # face | center | blur_pad
     zoom: punch              # none | punch | slow_push
     hook_overlay: true
@@ -64,10 +64,11 @@ render:
 
 brand:
   name: Keepingit_Rael
-  font: Montserrat ExtraBold         # must be installed on Windows (or put the .ttf in brand/fonts)
+  font: Montserrat Black             # bundled in brand/fonts (OFL); any font there or installed works
   fonts_dir: brand/fonts
   primary_color: "#FFFFFF"
-  highlight_color: "#FFD400"
+  highlight_color: "#FFD400"         # the word being spoken
+  emphasis_color: "#2BFF4A"          # money, numbers and power words
   accent_color: "#E63946"
   outline_color: "#000000"
   logo: brand/logo.png               # owner's own logo only; leave missing to skip watermark

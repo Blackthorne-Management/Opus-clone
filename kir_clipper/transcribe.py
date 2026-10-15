@@ -160,6 +160,44 @@ def read_wav(wav: Path) -> np.ndarray:
     return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
 
 
+ALIGN_VERSION = 1
+_FRAME = 160  # 10 ms at 16 kHz
+
+
+def align_word_starts(words: list[dict], samples: np.ndarray, sr: int = 16000, max_shift: float = 0.6) -> int:
+    """Move word starts that Whisper placed in silence forward to where the voice actually begins.
+
+    Whisper often starts a word early, pulling it back into the pause before it, so captions
+    flash a word before it is said. Starts are only ever moved later, never past the word's own
+    end, and only when the original start sits in quiet audio. Times are relative to `samples`.
+    Returns how many words were moved.
+    """
+    n = len(samples) // _FRAME
+    if n < 10 or not words:
+        return 0
+    frames = samples[: n * _FRAME].reshape(n, _FRAME)
+    db = 20 * np.log10(np.maximum(np.sqrt(np.mean(frames ** 2, axis=1)), 1e-5))
+    noise, loud = np.percentile(db, 10), np.percentile(db, 95)
+    if loud - noise < 12:  # no usable contrast between speech and background
+        return 0
+    thr = noise + 0.35 * (loud - noise)
+    voiced = db >= thr
+    moved, prev_s = 0, -1.0
+    for w in words:
+        f0 = int(w["s"] * sr / _FRAME)
+        if 0 <= f0 < n - 3 and not voiced[f0: f0 + 3].any():
+            limit = min(n - 1, int(min(w["e"] - 0.08, w["s"] + max_shift) * sr / _FRAME))
+            for f in range(f0 + 1, limit):
+                if voiced[f] and voiced[f + 1]:
+                    new_s = max(w["s"], f * _FRAME / sr - 0.02, prev_s + 0.05)
+                    if new_s < w["e"] - 0.05:
+                        w["s"] = round(new_s, 3)
+                        moved += 1
+                    break
+        prev_s = w["s"]
+    return moved
+
+
 def loudness_track(wav: Path) -> list[float]:
     """RMS loudness in dBFS for each second of a 16 kHz mono 16-bit WAV."""
     with wave.open(str(wav), "rb") as wf:
@@ -180,7 +218,11 @@ def transcribe(cfg: Config, source: Path, file_hash: str, duration: float, backe
     cache = cfg.subdir("transcripts") / f"{file_hash}.json"
     if cache.exists():
         log.info("Using cached transcript %s", cache.name)
-        return json.loads(cache.read_text(encoding="utf-8"))
+        result = json.loads(cache.read_text(encoding="utf-8"))
+        if result.get("aligned", 0) < ALIGN_VERSION:
+            _realign(cfg, source, duration, result)
+            cache.write_text(json.dumps(result), encoding="utf-8")
+        return result
 
     backend = backend or make_backend(cfg)
     chunk_s = float(cfg.get("transcription.chunk_minutes", 20)) * 60
@@ -195,7 +237,9 @@ def transcribe(cfg: Config, source: Path, file_hash: str, duration: float, backe
             log.info("Transcribing chunk %d/%d (%.0f-%.0fs)", i + 1, len(plan), keep_from, keep_to)
             media.extract_audio(source, wav, a_start, a_len)
             last = i == len(plan) - 1
-            for w in backend.words(wav):
+            chunk_words = backend.words(wav)
+            align_word_starts(chunk_words, read_wav(wav))
+            for w in chunk_words:
                 w["s"] = round(w["s"] + a_start, 3)
                 w["e"] = round(w["e"] + a_start, 3)
                 if keep_from <= w["s"] and (w["s"] < keep_to or last):
@@ -207,7 +251,30 @@ def transcribe(cfg: Config, source: Path, file_hash: str, duration: float, backe
             wav.unlink(missing_ok=True)
 
     words.sort(key=lambda w: w["s"])
-    result = {"duration": duration, "language": cfg.get("transcription.language"), "words": words, "energy": energy}
+    result = {"duration": duration, "language": cfg.get("transcription.language"), "words": words, "energy": energy,
+              "aligned": ALIGN_VERSION}
     cache.write_text(json.dumps(result), encoding="utf-8")
     log.info("Transcript: %d words, cached as %s", len(words), cache.name)
     return result
+
+
+def _realign(cfg: Config, source: Path, duration: float, result: dict) -> None:
+    """Apply word-start alignment to a transcript cached before alignment existed (no re-transcribing)."""
+    words = result["words"]
+    chunk_s = float(cfg.get("transcription.chunk_minutes", 20)) * 60
+    moved = 0
+    with tempfile.TemporaryDirectory(prefix="kir_align_") as tmp:
+        for i, (a_start, a_len, keep_from, keep_to) in enumerate(plan_chunks(duration, chunk_s, 0.0)):
+            last = keep_to >= duration
+            part = [w for w in words if keep_from <= w["s"] and (w["s"] < keep_to or last)]
+            if not part:
+                continue
+            wav = Path(tmp) / f"align_{i:03d}.wav"
+            media.extract_audio(source, wav, a_start, a_len)
+            rel = [{**w, "s": w["s"] - a_start, "e": w["e"] - a_start} for w in part]
+            moved += align_word_starts(rel, read_wav(wav))
+            for w, r in zip(part, rel):
+                w["s"] = round(r["s"] + a_start, 3)
+            wav.unlink(missing_ok=True)
+    result["aligned"] = ALIGN_VERSION
+    log.info("Re-timed %d of %d cached words to the audio", moved, len(words))
