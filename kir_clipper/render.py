@@ -53,8 +53,27 @@ def filter_path(p: Path) -> str:
     return f"'{s}'"
 
 
+_face_warned = False
+
+
 def detect_face_center(source: Path, start: float, end: float, samples: int = 12) -> float | None:
-    """Median horizontal face position (0..1) across the clip, or None if no reliable face."""
+    """Median horizontal face position (0..1) across the clip, or None if no reliable face.
+
+    Face tracking is a nice-to-have: any failure here means a center crop, never a failed render.
+    """
+    global _face_warned
+    try:
+        return _detect_face_center(source, start, end, samples)
+    except Exception as exc:
+        if not _face_warned:
+            _face_warned = True
+            log.warning("Face tracking unavailable (%s: %s); using center crop. "
+                        "Fix: .venv\\Scripts\\python -m pip install \"opencv-python-headless<5\"",
+                        type(exc).__name__, exc)
+        return None
+
+
+def _detect_face_center(source: Path, start: float, end: float, samples: int) -> float | None:
     try:
         import cv2  # optional dependency
     except ImportError:

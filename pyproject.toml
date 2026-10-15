@@ -25,7 +25,7 @@ dependencies = [
 # Local GPU/CPU transcription (recommended).
 whisper = ["faster-whisper>=1.0"]
 # Speaker-aware reframing (face tracking). Without it, clips use center crop.
-faces = ["opencv-python-headless>=4.9"]
+faces = ["opencv-python-headless>=4.9,<5"]  # OpenCV 5 removed CascadeClassifier
 # OpenAI Whisper API instead of local faster-whisper.
 openai = ["openai>=1.30"]
 # Auto cut-out of your photo for thumbnails (only needed if your photos lack a transparent background).
