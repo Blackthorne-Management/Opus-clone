@@ -248,3 +248,17 @@ def test_nvidia_dll_dirs_added_on_windows(tmp_path, monkeypatch):
     dirs = transcribe.add_nvidia_dll_dirs()
     assert [Path(d).parent.name for d in dirs] == ["cublas", "cudnn"] and added == dirs
     assert os.environ["PATH"].endswith("orig") and dirs[0] in os.environ["PATH"]
+
+
+def test_face_tracking_failure_falls_back_to_center_crop(monkeypatch, sample_video):
+    """OpenCV 5 has no CascadeClassifier; that must mean a center crop, not a failed render."""
+    import sys
+    import types
+
+    from kir_clipper import render
+
+    fake_cv2 = types.ModuleType("cv2")
+    fake_cv2.data = types.SimpleNamespace(haarcascades="")
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setattr(render, "_face_warned", False)
+    assert render.detect_face_center(sample_video, 0, 5) is None

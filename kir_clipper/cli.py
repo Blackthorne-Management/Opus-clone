@@ -73,8 +73,9 @@ def cmd_doctor(args) -> int:
         except ImportError:
             check("faster-whisper installed", False, 'pip install -e ".[whisper]"')
     try:
-        import cv2  # noqa: F401
-        check("face tracking (opencv) installed", True)
+        import cv2
+        check("face tracking (opencv) installed", hasattr(cv2, "CascadeClassifier"),
+              'OpenCV 5 dropped the face detector: .venv\\Scripts\\python -m pip install "opencv-python-headless<5"')
     except ImportError:
         print('  [--] opencv not installed: clips use center crop. pip install -e ".[faces]" for face tracking')
     logo = cfg.get("brand.logo")
