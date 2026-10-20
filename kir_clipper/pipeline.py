@@ -208,7 +208,8 @@ def edit_clip(cfg: Config, conn, clip_id: int, changes: dict) -> None:
     recipe.update(recipe_changes)
     clip.update(bounds)
     stream = conn.execute("SELECT * FROM streams WHERE id=?", (clip["stream_id"],)).fetchone()
-    transcript = json.loads((cfg.subdir("transcripts") / f"{stream['hash']}.json").read_text(encoding="utf-8"))
+    # transcribe() returns the cached transcript, re-timing it first if it predates the current word alignment.
+    transcript = transcribe(cfg, Path(stream["file_path"]), stream["hash"], float(stream["duration"] or 0))
     old = Path(clip["file_path"]) if clip["file_path"] else None
     edits = 1 + conn.execute("SELECT COUNT(*) FROM events WHERE kind='clip_rerendered' AND ref=?",
                              (str(clip_id),)).fetchone()[0]

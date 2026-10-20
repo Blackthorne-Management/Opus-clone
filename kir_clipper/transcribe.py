@@ -160,7 +160,7 @@ def read_wav(wav: Path) -> np.ndarray:
     return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-ALIGN_VERSION = 1
+ALIGN_VERSION = 2
 _FRAME = 160  # 10 ms at 16 kHz
 
 
@@ -182,7 +182,8 @@ def align_word_starts(words: list[dict], samples: np.ndarray, sr: int = 16000, m
         return 0
     thr = noise + 0.35 * (loud - noise)
     voiced = db >= thr
-    moved, prev_s = 0, -1.0
+    moved = _snap_boundaries(words, db, sr)
+    prev_s = -1.0
     for w in words:
         f0 = int(w["s"] * sr / _FRAME)
         if 0 <= f0 < n - 3 and not voiced[f0: f0 + 3].any():
@@ -195,6 +196,32 @@ def align_word_starts(words: list[dict], samples: np.ndarray, sr: int = 16000, m
                         moved += 1
                     break
         prev_s = w["s"]
+    return moved
+
+
+def _snap_boundaries(words: list[dict], db: np.ndarray, sr: int, window: float = 0.12, min_dip_db: float = 3.0) -> int:
+    """In connected speech Whisper's word boundaries can be off by 100-200 ms either way. Between two
+    words that run together, the real boundary is usually the quietest moment near it, so move the
+    boundary to the energy dip within +/-window seconds (only if the dip is clearly quieter)."""
+    n = len(db)
+    smooth = np.convolve(db, np.ones(3) / 3, mode="same")
+    fps = sr / _FRAME
+    moved = 0
+    for a, b in zip(words, words[1:]):
+        if b["s"] - a["e"] > 0.15:  # a real pause: handled by the onset pass
+            continue
+        t = b["s"]
+        lo = int(max(t - window, a["s"] + 0.06) * fps)
+        hi = int(min(t + window, b["e"] - 0.06) * fps)
+        f0 = int(t * fps)
+        if not (0 <= lo < f0 < hi < n):
+            continue
+        f = lo + int(np.argmin(smooth[lo:hi + 1]))
+        if smooth[f0] - smooth[f] >= min_dip_db and abs(f - f0) >= 2:
+            new_t = round(f / fps, 3)
+            b["s"] = new_t
+            a["e"] = min(a["e"], new_t) if new_t > a["s"] + 0.05 else a["e"]
+            moved += 1
     return moved
 
 
@@ -275,6 +302,7 @@ def _realign(cfg: Config, source: Path, duration: float, result: dict) -> None:
             moved += align_word_starts(rel, read_wav(wav))
             for w, r in zip(part, rel):
                 w["s"] = round(r["s"] + a_start, 3)
+                w["e"] = round(r["e"] + a_start, 3)
             wav.unlink(missing_ok=True)
     result["aligned"] = ALIGN_VERSION
     log.info("Re-timed %d of %d cached words to the audio", moved, len(words))
