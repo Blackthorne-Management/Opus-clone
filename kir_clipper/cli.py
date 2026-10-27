@@ -78,6 +78,14 @@ def cmd_doctor(args) -> int:
               'OpenCV 5 dropped the face detector: .venv\\Scripts\\python -m pip install "opencv-python-headless<5"')
     except ImportError:
         print('  [--] opencv not installed: clips use center crop. pip install -e ".[faces]" for face tracking')
+    if shutil.which("ffmpeg"):
+        from .audio import limiter_has_latency
+        if not limiter_has_latency():
+            print("  [--] older ffmpeg: the audio limiter's delay is corrected by trimming 5 ms (update ffmpeg to avoid it)")
+    from .research import ytdlp_available
+    if not ytdlp_available():
+        print("  [--] yt-dlp not installed: Niche research can't fetch YouTube Shorts (paste or upload instead). "
+              ".venv\\Scripts\\python -m pip install yt-dlp")
     logo = cfg.get("brand.logo")
     if logo and not cfg.resolve(logo).exists():
         print(f"  [--] logo not found at {cfg.resolve(logo)}: clips render without a watermark")
@@ -137,7 +145,9 @@ def dashboard_bind(cfg: Config, port: int | None = None) -> tuple[str, int]:
 def cmd_serve(args) -> int:
     import uvicorn
     from .web.app import create_app
-    cfg, _ = _ctx(args)
+    from .editor import resume
+    cfg, conn = _ctx(args)
+    resume(cfg, conn)
     host, port = dashboard_bind(cfg, args.port)
     uvicorn.run(create_app(cfg), host=host, port=port, log_level="warning")
     return 0
@@ -228,6 +238,66 @@ def cmd_thumbnails(args) -> int:
     return 0
 
 
+def cmd_edit(args) -> int:
+    """Edit a raw take (or photos for stop motion) now, like the dashboard's Edit a video tab."""
+    import shutil
+    import tempfile
+    from .editor import create, process
+    cfg, conn = _ctx(args)
+    with tempfile.TemporaryDirectory() as tmp:
+        copies = []
+        for f in args.files:  # create() moves files into the data folder; never move the owner's originals
+            dst = Path(tmp) / Path(f).name
+            shutil.copy2(f, dst)
+            copies.append(dst)
+        sound = None
+        if args.sound:
+            sound = Path(tmp) / ("sound_" + Path(args.sound).name)
+            shutil.copy2(args.sound, sound)
+        opts = {"pace": args.pace, "caption_style": args.style, "write_copy": not args.no_copy,
+                "hook_text": args.hook or "", "title": args.title or "",
+                "stopmotion": {"look": args.look, "fps": args.fps} if args.look else None,
+                "look": args.look or "classic", "fps": args.fps, "hold": args.hold}
+        edit_id = create(cfg, conn, copies, opts, sound)
+    clip_id = process(cfg, conn, edit_id)
+    row = db.get_clip(conn, clip_id)
+    print(f"clip {clip_id} is waiting in Needs review: {row['file_path']}")
+    return 0
+
+
+def cmd_research(args) -> int:
+    from .research import add_posts, fetch_channel, outliers
+    cfg, conn = _ctx(args)
+    if args.action == "add":
+        for f in args.args:
+            print(f, add_posts(conn, Path(f).read_text(encoding="utf-8-sig", errors="replace"), source="file"))
+        return 0
+    if args.action == "fetch":
+        for h in args.args:
+            print(h, fetch_channel(conn, h))
+        return 0
+    rep = outliers(conn, min_multiple=args.min)
+    print(f"{rep['posts']} posts from {len(rep['creators'])} creators ({rep['evidence']}); outliers at {args.min}x:")
+    for o in rep["outliers"][:30]:
+        print(f"  {o['multiple']:6.2f}x  {o['views']:>10,}  {o['creator'][:20]:<20} {o['formula'][:22]:<22} {o['hook'][:60]}")
+    if rep["thin"]:
+        print("skipped (under 4 posts): " + ", ".join(f"{t['creator']} ({t['posts']})" for t in rep["thin"]))
+    return 0
+
+
+def cmd_script(args) -> int:
+    from .studio import start_script
+    cfg, conn = _ctx(args)
+    sid = start_script(cfg, conn, args.idea, background=False)
+    row = conn.execute("SELECT status, error, script_json FROM scripts WHERE id=?", (sid,)).fetchone()
+    if row["status"] != "ready":
+        print(f"failed: {row['error']}")
+        return 1
+    import json as _json
+    print(_json.loads(row["script_json"])["markdown"])
+    return 0
+
+
 def cmd_run(args) -> int:
     """Everything in one long-running process: watcher, publisher loop, daily jobs, dashboard."""
     import uvicorn
@@ -251,6 +321,9 @@ def cmd_run(args) -> int:
     beat_conn = db.connect(cfg.db_path)
     watcher.on_tick = lambda: beat(beat_conn, "watcher", inbox=str(watcher.inbox), processing=watcher.current)
     threading.Thread(target=watcher.run, name="watcher", daemon=True).start()
+
+    from .editor import resume
+    resume(cfg, conn)  # uploads queued in "Edit a video" before a restart
 
     if not args.no_dashboard:
         host, port = dashboard_bind(cfg, args.port)
@@ -407,6 +480,27 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("action", choices=["list", "build", "whole"])
     s.add_argument("id", type=int, nargs="?")
     s.set_defaults(fn=cmd_longform)
+
+    s = sub.add_parser("edit", help="edit a raw take (or photos -> stop motion); the result waits in Needs review")
+    s.add_argument("files", nargs="+")
+    s.add_argument("--pace", choices=["tight", "normal", "loose", "off"], default="tight", help="jump cuts")
+    s.add_argument("--style", default=None, help="caption style: hormozi | bold_pop | karaoke | boxed | minimal")
+    s.add_argument("--look", choices=["classic", "clay", "poster", "pixel"], default=None, help="stop-motion look")
+    s.add_argument("--fps", type=int, default=12, help="stop-motion drawings per second (8, 10, 12)")
+    s.add_argument("--hold", type=int, default=2, help="photos: frames each photo is held")
+    s.add_argument("--sound", help="photos: a sound or voice-over file")
+    s.add_argument("--hook", help="on-screen hook text")
+    s.add_argument("--title")
+    s.add_argument("--no-copy", action="store_true", help="don't ask Claude to write the hook/title/captions")
+    s.set_defaults(fn=cmd_edit)
+    s = sub.add_parser("research", help="niche research: add <files> | fetch <@handles> | report")
+    s.add_argument("action", choices=["add", "fetch", "report"])
+    s.add_argument("args", nargs="*")
+    s.add_argument("--min", type=float, default=2.0, help="outlier threshold (x the creator's median)")
+    s.set_defaults(fn=cmd_research)
+    s = sub.add_parser("script", help="write a shoot-ready script for an idea (Script studio)")
+    s.add_argument("idea")
+    s.set_defaults(fn=cmd_script)
 
     args = p.parse_args(argv)
     return args.fn(args)

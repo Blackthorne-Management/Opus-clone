@@ -14,9 +14,11 @@ import statistics
 import tempfile
 from pathlib import Path
 
-from . import media
+from . import audio, jumpcut, media
 from .captions import build_ass
 from .config import Config
+from .stopmotion import normalize_settings as normalize_stop
+from .stopmotion import video_filter as stopmotion_filter
 
 log = logging.getLogger("kir.render")
 
@@ -45,6 +47,9 @@ def default_recipe(cfg: Config, clip: dict) -> dict:
         "trim_start": 0.0,
         "trim_end": 0.0,
         "aspect": "9:16",
+        # Tight jump cuts inside the clip (pauses, ums, retakes): tight | normal | loose | off
+        "jumpcut": (cfg.get("jumpcut.pace", "tight") if cfg.get("jumpcut.enabled", True) else "off"),
+        "stopmotion": None,  # or {"look": classic|clay|poster|pixel, "fps": 8|10|12}
     }
 
 
@@ -105,13 +110,14 @@ def _detect_face_center(source: Path, start: float, end: float, samples: int) ->
 
 
 def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int, face_x: float | None,
-                      has_logo: bool, ass_name: str, fonts_dir: Path | None) -> str:
+                      has_logo: bool, ass_name: str, fonts_dir: Path | None, src: str = "0:v") -> str:
+    """`src` is the input video label: "0:v", or the output of the jump-cut chain."""
     src_w, src_h = info["width"], info["height"]
     mode = recipe.get("crop_mode", "center")
     chains = []
     if mode == "blur_pad":
         chains.append(
-            f"[0:v]split=2[bgsrc][fgsrc];"
+            f"[{src}]split=2[bgsrc][fgsrc];"
             f"[bgsrc]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},boxblur=24:2,"
             f"eq=brightness=-0.08[bg];"
             f"[fgsrc]scale={out_w}:-2[fg];"
@@ -126,7 +132,7 @@ def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int
         cx = (face_x if (mode == "face" and face_x is not None) else 0.5) * src_w
         x = int(min(max(cx - crop_w / 2, 0), src_w - crop_w))
         y = int((src_h - crop_h) / 2)
-        chains.append(f"[0:v]crop={crop_w}:{crop_h}:{x}:{y},scale={out_w}:{out_h}:flags=lanczos,setsar=1[base]")
+        chains.append(f"[{src}]crop={crop_w}:{crop_h}:{x}:{y},scale={out_w}:{out_h}:flags=lanczos,setsar=1[base]")
 
     zoom = recipe.get("zoom", "none")
     amount = float(recipe.get("zoom_amount", 0.1))
@@ -146,6 +152,11 @@ def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int
         chains.append(f"{pre}[zoomed]")
     last = "zoomed"
 
+    stop = normalize_stop(recipe.get("stopmotion"))
+    if stop:  # stop motion on the picture only; logo and captions come after, so they stay smooth
+        chains.append(f"[{last}]{stopmotion_filter(out_w, out_h, fps, stop)}[stop]")
+        last = "stop"
+
     if has_logo:
         corner = recipe.get("watermark_corner", "tr")
         pos = {"tr": "W-w-48:64", "tl": "48:64", "br": "W-w-48:H-h-64", "bl": "48:H-h-64"}.get(corner, "W-w-48:64")
@@ -162,7 +173,8 @@ def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int
 
 def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe: dict, out_path: Path,
                 info: dict | None = None) -> Path:
-    """Cut, reframe, zoom, brand, and caption one clip. `words` are relative to the clip start."""
+    """Cut, tighten, reframe, zoom, brand, and caption one clip, then master its audio.
+    `words` are relative to the clip start. Writes <out>.edit.json describing the jump cuts and audio."""
     info = info or media.probe(source)
     r = cfg.get("render")
     out_w, out_h = int(r.get("width", 1080)), int(r.get("height", 1920))
@@ -173,6 +185,20 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
     shift = float(recipe.get("trim_start", 0.0))
     words = [{**w, "s": w["s"] - shift, "e": w["e"] - shift} for w in words if w["s"] - shift >= -0.05
              and w["e"] - shift <= duration + 0.3]
+    has_audio = info.get("has_audio", True)
+
+    cuts = None
+    settings = jumpcut.settings_for(cfg, recipe) if has_audio else None
+    if settings:
+        try:
+            cuts = jumpcut.plan(source, start, duration, words, fps, settings)
+        except Exception:
+            log.exception("Jump-cut planning failed; rendering the clip uncut")
+    if cuts:
+        words = jumpcut.remap_words(words, cuts["keeps"])
+        out_duration = sum(e - s for s, e in cuts["keeps"])
+    else:
+        out_duration = duration
 
     face_x = None
     if recipe.get("crop_mode") == "face":
@@ -186,21 +212,31 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     encoder = media.pick_encoder(r.get("encoder", "auto"))
+    report = {"duration_in": round(duration, 2), "duration_out": round(out_duration, 2),
+              "jumpcut": None, "audio": None}
     with tempfile.TemporaryDirectory(prefix="kir_render_") as tmp:
         tmpdir = Path(tmp)
         # ffmpeg runs with cwd=tmpdir so the subtitle file can be referenced by bare name.
-        (tmpdir / "captions.ass").write_text(build_ass(words, duration, recipe, brand, out_w, out_h), encoding="utf-8")
-        graph = build_filtergraph(info, recipe, out_w, out_h, fps, face_x, has_logo, "captions.ass", fonts_dir)
+        (tmpdir / "captions.ass").write_text(build_ass(words, out_duration, recipe, brand, out_w, out_h), encoding="utf-8")
+        src = "0:v"
+        pre = []
+        if cuts:
+            pre.append(jumpcut.video_chain(cuts["frames"], fps, "0:v", "cut"))
+            src = "cut"
+        graph = build_filtergraph(info, recipe, out_w, out_h, fps, face_x, has_logo, "captions.ass", fonts_dir, src)
+        if has_audio:
+            pre.append(jumpcut.audio_chain(cuts["keeps"], settings["crossfade_ms"]) if cuts else "[0:a:0]anull[acut]")
+        graph = ";".join(pre + [graph])
         args = ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
         if has_logo:
             args += ["-i", str(logo)]
         args += ["-filter_complex", graph, "-map", "[vout]"]
-        if info.get("has_audio", True):
-            args += ["-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-c:a", "aac",
-                     "-b:a", r.get("audio_bitrate", "192k"), "-ar", "48000"]
+        if has_audio:
+            # Raw PCM here; the audio is encoded once, by the mastering pass below.
+            args += ["-map", "[acut]", "-c:a", "pcm_s16le", "-ar", "48000"]
         args += media.encoder_args(encoder, int(r.get("crf", 20)), int(r.get("nvenc_cq", 23)))
-        tmp_out = tmpdir / "out.mp4"
-        args += ["-movflags", "+faststart", str(tmp_out)]
+        tmp_out = tmpdir / ("pre.mkv" if has_audio else "out.mp4")
+        args += ([] if has_audio else ["-movflags", "+faststart"]) + [str(tmp_out)]
         try:
             media.ffmpeg(*args, cwd=tmpdir)
         except RuntimeError:
@@ -211,8 +247,43 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
                 media.ffmpeg(*args, cwd=tmpdir)
             else:
                 raise
+        if has_audio:
+            final = tmpdir / "out.mp4"
+            report["audio"] = audio.finish(tmp_out, final, cfg, r.get("audio_bitrate", "192k"))
+            tmp_out = final
         shutil.move(str(tmp_out), out_path)
+    if cuts:
+        report["jumpcut"] = {"pace": cuts["pace"], "gate": cuts["gate"], "removed": cuts["removed"],
+                             "cuts": [{"start": round(c["start"], 2), "end": round(c["end"], 2), "reason": c["reason"],
+                                       "text": c.get("text")} for c in cuts["cuts"]]}
     out_path.with_suffix(".recipe.json").write_text(json.dumps(recipe, indent=2), encoding="utf-8")
-    log.info("Rendered %s (%.1fs, %s, %s captions, %s zoom)", out_path.name, duration, recipe.get("crop_mode"),
-             recipe.get("caption_style"), recipe.get("zoom"))
+    out_path.with_suffix(".edit.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    log.info("Rendered %s (%.1fs%s, %s, %s captions, %s zoom%s)", out_path.name, out_duration,
+             f", {cuts['removed']:.1f}s cut" if cuts else "", recipe.get("crop_mode"), recipe.get("caption_style"),
+             recipe.get("zoom"), ", stop motion" if recipe.get("stopmotion") else "")
     return out_path
+
+
+def edit_summary(out_path: Path) -> dict | None:
+    """Compact version of edit_report for the clip's `checks` (shown on the dashboard card)."""
+    rep = edit_report(out_path)
+    if not rep:
+        return None
+    reasons: dict[str, int] = {}
+    for c in (rep.get("jumpcut") or {}).get("cuts", []):
+        for r in c["reason"].split("+"):
+            reasons[r] = reasons.get(r, 0) + 1
+    a = rep.get("audio") or {}
+    return {"duration_in": rep["duration_in"], "duration_out": rep["duration_out"],
+            "removed": (rep.get("jumpcut") or {}).get("removed", 0.0), "cuts": reasons,
+            "pace": (rep.get("jumpcut") or {}).get("pace"),
+            "lufs": (a.get("measured") or {}).get("I"), "audio_note": a.get("note") or ""}
+
+
+def edit_report(out_path: Path) -> dict | None:
+    """What the last render of this file cut and how its audio was mastered (see render_clip)."""
+    p = Path(out_path).with_suffix(".edit.json")
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None

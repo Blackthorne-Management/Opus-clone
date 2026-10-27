@@ -28,6 +28,8 @@ whisper = ["faster-whisper>=1.0"]
 faces = ["opencv-python-headless>=4.9,<5"]  # OpenCV 5 removed CascadeClassifier
 # OpenAI Whisper API instead of local faster-whisper.
 openai = ["openai>=1.30"]
+# Niche research: fetch a public YouTube channel's Shorts with view counts.
+research = ["yt-dlp>=2025.1"]
 # Auto cut-out of your photo for thumbnails (only needed if your photos lack a transparent background).
 thumbs = ["rembg>=2.0"]
 dev = ["pytest>=8"]
@@ -39,7 +41,7 @@ kir = "kir_clipper.cli:main"
 include = ["kir_clipper*"]
 
 [tool.setuptools.package-data]
-kir_clipper = ["web/*.html"]
+kir_clipper = ["web/*.html", "virality/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

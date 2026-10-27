@@ -22,8 +22,8 @@ if (-not (Test-Path ".venv")) {
 }
 $Py = Join-Path $Repo ".venv\Scripts\python.exe"
 & $Py -m pip install --upgrade pip
-# whisper = local transcription, faces = speaker-aware reframing
-& $Py -m pip install -e ".[whisper,faces]"
+# whisper = local transcription, faces = speaker-aware reframing, research = public Shorts for Niche research
+& $Py -m pip install -e ".[whisper,faces,research]"
 
 # GPU transcription needs NVIDIA's cuBLAS/cuDNN runtime. Installing via pip is the simplest route.
 if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {

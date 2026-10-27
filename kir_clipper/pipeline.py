@@ -13,9 +13,10 @@ from .cadence import plan_clip
 from .config import Config
 from .highlights import clip_words, find_highlights, fmt_ts
 from .notify import notify
-from .render import default_recipe, render_clip
+from .render import default_recipe, edit_summary, render_clip
 from .scheduler import plan_posts
 from .transcribe import transcribe
+from .virality import score_hook
 
 log = logging.getLogger("kir.pipeline")
 
@@ -162,7 +163,8 @@ def create_clips(cfg: Config, conn, stream_id: int, source: Path, clips: list[di
             db.update_clip(conn, clip_id, status="failed", note=f"render: {str(exc)[:500]}")
             counts["failed"] += 1
             continue
-        db.update_clip(conn, clip_id, status=status, file_path=str(out))
+        db.update_clip(conn, clip_id, status=status, file_path=str(out),
+                       checks={**(clip.get("checks") or {}), "edit": edit_summary(out)})
         db.log_event(conn, "clip_created", clip_id, {"score": clip["score"], "status": status})
         if status == "approved":
             auto_ids.append(clip_id)
@@ -202,6 +204,10 @@ def edit_clip(cfg: Config, conn, clip_id: int, changes: dict) -> None:
     needs_render = bool(recipe_changes) or any(abs(bounds[k] - clip[k]) > 0.01 for k in bounds)
     if text_fields:
         db.update_clip(conn, clip_id, **text_fields)
+    if "hook_text" in recipe_changes:  # the owner rewrote the on-screen hook: re-score it
+        checks = dict(clip.get("checks") or {})
+        checks["hook"] = score_hook(recipe_changes["hook_text"])
+        db.update_clip(conn, clip_id, checks=checks)
     if not needs_render:
         db.log_event(conn, "clip_edited", clip_id, list(text_fields))
         return
@@ -216,7 +222,9 @@ def edit_clip(cfg: Config, conn, clip_id: int, changes: dict) -> None:
     out = cfg.subdir("clips") / f"stream_{clip['stream_id']:04d}" / f"clip_{clip_id:05d}_v{clip['version']}_e{edits}.mp4"
     render_clip(cfg, Path(stream["file_path"]), clip, clip_words(transcript["words"], clip["start"], clip["end"]),
                 recipe, out)
-    db.update_clip(conn, clip_id, recipe_json=recipe, file_path=str(out), start=clip["start"], end=clip["end"])
+    checks = {**(db.clip_dict(db.get_clip(conn, clip_id)).get("checks") or {}), "edit": edit_summary(out)}
+    db.update_clip(conn, clip_id, recipe_json=recipe, file_path=str(out), start=clip["start"], end=clip["end"],
+                   checks=checks)
     db.log_event(conn, "clip_rerendered", clip_id, {"recipe": recipe_changes, "bounds": bounds,
                                                      "previous_file": str(old) if old else None})
 

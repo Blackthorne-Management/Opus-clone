@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS clips (
     hashtags TEXT,                    -- JSON list
     platform_captions TEXT,           -- JSON {platform: {title, caption}}
     recipe_json TEXT,
+    checks TEXT,                      -- JSON: hook scores (A, B, spoken) + AI-tell cleanup report
     file_path TEXT,
     status TEXT NOT NULL,             -- see STATUSES
     note TEXT,
@@ -118,7 +119,52 @@ CREATE TABLE IF NOT EXISTS events (
     detail TEXT
 );
 
+-- Niche research (research.py): other creators' posts you pasted, uploaded or fetched.
+CREATE TABLE IF NOT EXISTS research_posts (
+    id INTEGER PRIMARY KEY,
+    creator TEXT NOT NULL,
+    platform TEXT,
+    views INTEGER,
+    likes INTEGER,
+    comments INTEGER,
+    hook TEXT,
+    title TEXT,
+    url TEXT,
+    duration REAL,
+    posted TEXT,                      -- YYYY-MM-DD when known
+    median INTEGER,                   -- the creator's typical views, if you supplied it
+    source TEXT,                      -- paste | file | yt-dlp
+    added_at TEXT NOT NULL
+);
+
+-- Script studio (studio.py): shoot-ready scripts for new videos.
+CREATE TABLE IF NOT EXISTS scripts (
+    id INTEGER PRIMARY KEY,
+    idea TEXT NOT NULL,
+    based_on TEXT,                    -- JSON: the research post it was modelled on, if any
+    status TEXT NOT NULL,             -- writing | ready | failed | shot
+    script_json TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- "Edit a video" (editor.py): raw takes uploaded for a full edit.
+CREATE TABLE IF NOT EXISTS edits (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,               -- video | photos
+    name TEXT NOT NULL,
+    options TEXT NOT NULL,            -- JSON: pace, caption style, stop motion, copy, ...
+    status TEXT NOT NULL,             -- queued | working | ready | failed
+    stream_id INTEGER REFERENCES streams(id),
+    clip_id INTEGER REFERENCES clips(id),
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_clips_status ON clips(status);
+CREATE INDEX IF NOT EXISTS idx_research_creator ON research_posts(creator);
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
 CREATE INDEX IF NOT EXISTS idx_posts_platform_time ON posts(platform, publish_at);
 """
@@ -163,6 +209,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
     if cols and "kind" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN kind TEXT NOT NULL DEFAULT 'short'")
+    if cols and "checks" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN checks TEXT")
     scols = {r["name"] for r in conn.execute("PRAGMA table_info(streams)")}
     if scols and "kind" not in scols:
         conn.execute("ALTER TABLE streams ADD COLUMN kind TEXT NOT NULL DEFAULT 'stream'")
@@ -210,20 +258,21 @@ def insert_clip(conn, stream_id: int, clip: dict, status: str, recipe: dict | No
     now = iso(utcnow())
     cur = conn.execute(
         """INSERT INTO clips(stream_id, parent_clip_id, version, kind, start, "end", score, hook, reason, title,
-               caption, hashtags, platform_captions, recipe_json, status, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               caption, hashtags, platform_captions, recipe_json, checks, status, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             stream_id, parent_clip_id, version, kind, clip["start"], clip["end"], int(clip["score"]),
             clip.get("hook"), clip.get("reason"), clip.get("title"), clip.get("caption"),
             json.dumps(clip.get("hashtags") or []), json.dumps(clip.get("platform_captions") or {}),
-            json.dumps(recipe) if recipe else None, status, now, now,
+            json.dumps(recipe) if recipe else None, json.dumps(clip["checks"]) if clip.get("checks") else None,
+            status, now, now,
         ),
     )
     return cur.lastrowid
 
 
 def update_clip(conn, clip_id: int, **fields) -> None:
-    for key in ("hashtags", "platform_captions", "recipe_json"):
+    for key in ("hashtags", "platform_captions", "recipe_json", "checks"):
         if key in fields and not isinstance(fields[key], (str, type(None))):
             fields[key] = json.dumps(fields[key])
     fields["updated_at"] = iso(utcnow())
@@ -239,6 +288,7 @@ def clip_dict(row) -> dict:
     d["hashtags"] = json.loads(d.get("hashtags") or "[]")
     d["platform_captions"] = json.loads(d.get("platform_captions") or "{}")
     d["recipe"] = json.loads(d["recipe_json"]) if d.get("recipe_json") else None
+    d["checks"] = json.loads(d["checks"]) if d.get("checks") else None
     return d
 
 
@@ -256,6 +306,22 @@ def update_longform(conn, lf_id: int, **fields) -> None:
         fields["plan_json"] = json.dumps(fields["plan_json"])
     fields["updated_at"] = iso(utcnow())
     _update(conn, "longform", lf_id, fields)
+
+
+# ---- scripts and edits -----------------------------------------------------
+
+def update_script(conn, script_id: int, **fields) -> None:
+    if "script_json" in fields and not isinstance(fields["script_json"], (str, type(None))):
+        fields["script_json"] = json.dumps(fields["script_json"])
+    fields["updated_at"] = iso(utcnow())
+    _update(conn, "scripts", script_id, fields)
+
+
+def update_edit(conn, edit_id: int, **fields) -> None:
+    if "options" in fields and not isinstance(fields["options"], str):
+        fields["options"] = json.dumps(fields["options"])
+    fields["updated_at"] = iso(utcnow())
+    _update(conn, "edits", edit_id, fields)
 
 
 # ---- posts -----------------------------------------------------------------

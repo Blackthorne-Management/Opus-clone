@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import Config
+from .virality import WRITING_RULES, polish
 
 log = logging.getLogger("kir.highlights")
 
@@ -237,7 +238,9 @@ Review it as the final edit:
    - youtube: title = searchable Shorts title under 90 characters; caption = 1-2 sentences + #shorts.
    - instagram: caption can be longer, 2-4 sentences, a question to drive comments, then hashtags.
    - facebook: conversational 1-3 sentences. x: under 240 characters including hashtags.
-Only use sentence indices shown above."""
+Only use sentence indices shown above.
+
+{WRITING_RULES}"""
 
 
 # --------------------------------------------------------------------------- main entry
@@ -284,6 +287,7 @@ def find_highlights(cfg: Config, transcript: dict, llm, lessons: str = "") -> li
         if r is None:
             return None
         r["platform_captions"] = {p: r.pop(p) for p in PLATFORMS if p in r}
+        r["checks"] = polish(r)
         return r
 
     with ThreadPoolExecutor(max_workers=4) as pool:

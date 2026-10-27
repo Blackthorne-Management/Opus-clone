@@ -33,6 +33,7 @@ from .config import Config
 from .highlights import build_sentences, fmt_ts, render_sentences, windows
 from .notify import notify
 from .render import filter_path
+from .virality import WRITING_RULES, clean_text
 
 log = logging.getLogger("kir.longform")
 
@@ -276,13 +277,15 @@ Full transcript:
 
 Write: a searchable, honest YouTube title under 70 characters (no clickbait that the video doesn't deliver);
 a description of 2-3 short paragraphs saying what the stream covers and who it helps (no chapter list, no
-links, no hashtags; those are added separately); and 8-15 tags.""",
+links, no hashtags; those are added separately); and 8-15 tags.
+
+{WRITING_RULES}""",
         META_SCHEMA,
     )
     log.info("Plan: %d cuts (%d enabled, %.0fs), %d chapters, %d lower thirds, %d pop-ups, %d zooms",
              len(cuts), sum(c["enabled"] for c in cuts), used, len(chapters), len(lower), len(popups), len(zooms))
     return {"cuts": cuts, "chapters": chapters, "lower_thirds": lower, "popups": popups, "zooms": zooms,
-            "meta": {"title": meta["title"][:100], "description": meta["description"],
+            "meta": {"title": clean_text(meta["title"])[0][:100], "description": clean_text(meta["description"])[0],
                      "tags": [x.lstrip("#") for x in meta["tags"]][:20]}}
 
 
