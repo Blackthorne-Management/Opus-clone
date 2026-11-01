@@ -1,7 +1,7 @@
 # voice.md
 
 How you sound. The Script studio reads this before it writes anything, and keeps every line in your
-voice. Edit it in the dashboard (Script studio -> Your voice) or here in Notepad.
+voice. Edit it in the dashboard (Script studio -> Your voice). Your filled-in copy is saved as `brand/my-voice.md`; this file is the blank template.
 
 Fastest way to fill it: Script studio -> **Build my voice from my clips**. Claude reads the transcripts
 of your best clips (your own spoken words), measures your pace, and writes the profile below with

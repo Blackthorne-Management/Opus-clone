@@ -114,6 +114,8 @@ def create_app(cfg: Config) -> FastAPI:
         streams = [dict(r) for r in c.execute(
             "SELECT id, original_path, duration, status, error, processed_at FROM streams ORDER BY id DESC LIMIT 10")]
         return {
+            "brand": cfg.get("brand.name") or "",
+            "setup_done": bool(cfg.get("setup.done")),
             "dry_run": cfg.dry_run,
             "auto_post_threshold": cfg.get("review.auto_post_threshold"),
             "auto_reject_floor": cfg.get("review.auto_reject_floor"),
@@ -159,6 +161,14 @@ def create_app(cfg: Config) -> FastAPI:
         if not row or not row["file_path"] or not Path(row["file_path"]).exists():
             raise HTTPException(404)
         return FileResponse(row["file_path"], media_type="video/mp4")
+
+    @app.get("/media/clip/{clip_id}/srt")
+    def clip_srt(clip_id: int):
+        row = db.get_clip(conn(), clip_id)
+        srt = Path(row["file_path"]).with_suffix(".srt") if row and row["file_path"] else None
+        if not srt or not srt.exists():
+            raise HTTPException(404, "No caption file for this clip (re-render it to make one)")
+        return FileResponse(srt, media_type="application/x-subrip", filename=f"clip_{clip_id}.srt")
 
     @app.post("/api/clips/{clip_id}/approve")
     def approve(clip_id: int, body: dict = Body(default={})):
@@ -404,6 +414,30 @@ def create_app(cfg: Config) -> FastAPI:
         evaluate(c, cfg)
         return ab_summary(c)
 
+    @app.get("/api/setup")
+    def setup_get():
+        from ..onboarding import current
+        return current(cfg)
+
+    @app.post("/api/setup")
+    async def setup_post(name: str = Form(""), cta_text: str = Form(""), timezone: str = Form(""),
+                         upload_post_user: str = Form(""), inbox: str = Form(""), criteria: str = Form(""),
+                         topics: str = Form(""), wants: str = Form(""), logo: UploadFile | None = File(None)):
+        from ..onboarding import is_image, save
+        logo_bytes = None
+        if logo is not None and logo.filename:
+            logo_bytes = await logo.read()
+            if not is_image(logo_bytes):
+                raise HTTPException(400, "The logo must be a PNG file (a transparent background looks best)")
+        try:
+            result = save(cfg, {"name": name, "cta_text": cta_text, "timezone": timezone,
+                                "upload_post_user": upload_post_user, "inbox": inbox, "criteria": criteria,
+                                "topics": topics, "wants": wants}, logo_bytes)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        db.log_event(conn(), "setup_saved", None, {"name": name})
+        return {"ok": True, **result}
+
     @app.get("/api/settings")
     def get_settings():
         from ..maintenance import dashboard_url
@@ -452,6 +486,19 @@ def create_app(cfg: Config) -> FastAPI:
             return fetch_channel(conn(), handle, int(body.get("limit") or 40))
         except RuntimeError as exc:
             raise HTTPException(400, str(exc))
+
+    @app.post("/api/research/breakdown")
+    def research_breakdown(body: dict = Body(default={})):
+        from ..research import breakdown
+        try:
+            return breakdown(cfg, conn(), _claude(), min_multiple=float(body.get("min") or 2.0))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.get("/api/research/breakdown")
+    def research_breakdown_last():
+        from ..research import last_breakdown
+        return last_breakdown(cfg) or {}
 
     @app.post("/api/research/remove")
     def research_remove(body: dict = Body(...)):
@@ -506,6 +553,12 @@ def create_app(cfg: Config) -> FastAPI:
             based_on = ranked.get(post["id"]) or {"creator": post["creator"], "views": post["views"],
                                                   "hook": post["hook"] or post["title"], "multiple": None,
                                                   "formula": None}
+            from ..research import last_breakdown
+            bd = last_breakdown(cfg) or {}
+            mine = next((w for w in bd.get("winners", []) if w.get("id") == post["id"]), None)
+            if mine:
+                based_on = {**based_on, "breakdown": {k: mine[k] for k in ("format", "structure", "cta", "pace")},
+                            "shared": bd.get("shared")}
         llm = _claude()
         try:
             sid = start_script(cfg, conn(), body.get("idea") or "", based_on, llm=llm)

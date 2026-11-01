@@ -232,3 +232,57 @@ def test_dashboard_endpoints_for_new_tabs(cfg, conn, tmp_path, monkeypatch):
     bad = client.post("/api/edits", files=[("files", ("notes.txt", b"hello", "text/plain"))], data={"options": "{}"})
     assert bad.status_code == 400
     assert "Edit a video" in client.get("/").text
+
+
+class BreakdownLLM:
+    def __init__(self):
+        self.prompts = []
+
+    def __call__(self, system, user, schema, max_tokens=16000):
+        self.prompts.append(user)
+        ids = [int(x) for x in __import__("re").findall(r'<winner id="(\d+)"', user)]
+        return {"winners": [{"id": i, "format": "talking head", "structure": "hook, proof, CTA", "cta": "comment PLAN",
+                             "pace": "35s, fast"} for i in ids],
+                "shared": "Every winner opens on a dollar figure.", "how_to_use_it": "Lead with your debt number."}
+
+
+def test_winner_breakdown_feeds_the_script(cfg, conn):
+    research.add_posts(conn, PASTE.replace("https://www.tiktok.com/@smallcoach/video/1", "https://youtu.be/abc123"))
+    subs = {"events": [{"segs": [{"utf8": "I paid off twelve grand"}, {"utf8": " waking up at five"}]}]}
+
+    def runner(cmd):
+        out = cmd[cmd.index("-o") + 1].replace("%(ext)s", "en.json3")
+        __import__("pathlib").Path(out).write_text(json.dumps(subs), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    llm = BreakdownLLM()
+    bd = research.breakdown(cfg, conn, llm, runner=runner)
+    assert bd["shared"].startswith("Every winner") and bd["winners"][0]["creator"] == "smallcoach"
+    assert "transcript: I paid off twelve grand waking up at five" in llm.prompts[0]
+    assert "Why you're still broke" in llm.prompts[0]           # ordinary posts given for contrast
+    assert research.last_breakdown(cfg)["shared"] == bd["shared"]
+    cfg.root = cfg.data_dir
+    client = TestClient(create_app(cfg))
+    client.app.dependency_overrides = {}
+    sid = bd["winners"][0]["id"]
+    import kir_clipper.llm as llm_mod
+    script_llm = ScriptLLM()
+    original = llm_mod.ClaudeJSON
+    llm_mod.ClaudeJSON = lambda c: script_llm
+    try:
+        r = client.post("/api/studio/scripts", json={"research_id": sid, "idea": "my debt story"})
+        assert r.status_code == 200
+        for _ in range(100):
+            row = conn.execute("SELECT status FROM scripts WHERE id=?", (r.json()["id"],)).fetchone()
+            if row["status"] != "writing":
+                break
+            __import__("time").sleep(0.05)
+    finally:
+        llm_mod.ClaudeJSON = original
+    assert "What the winners in this niche share: Every winner opens on a dollar figure." in script_llm.calls[0][1]
+    assert "structure hook, proof, CTA" in script_llm.calls[0][1]
+
+
+def test_breakdown_needs_outliers(cfg, conn):
+    with pytest.raises(ValueError):
+        research.breakdown(cfg, conn, BreakdownLLM())

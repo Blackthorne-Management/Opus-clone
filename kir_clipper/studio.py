@@ -66,16 +66,23 @@ def _file(cfg: Config, key: str, default: str) -> Path:
     return cfg.resolve(cfg.get(f"studio.{key}", default))
 
 
+# Your filled-in profiles live in brand/my-*.md (not in git, so updates never overwrite them).
+# brand/voice.md and brand/audience.md are the blank templates they start from.
+PROFILES = (("voice", "brand/my-voice.md", "brand/voice.md"), ("audience", "brand/my-audience.md", "brand/audience.md"))
+
+
 def read_profile(cfg: Config) -> dict:
     out = {}
-    for key, default in (("voice", "brand/voice.md"), ("audience", "brand/audience.md")):
+    for key, default, template in PROFILES:
         p = _file(cfg, f"{key}_file", default)
+        if not p.exists():
+            p = cfg.resolve(template)
         out[key] = p.read_text(encoding="utf-8") if p.exists() else ""
     return out
 
 
 def save_profile(cfg: Config, voice: str | None = None, audience: str | None = None) -> None:
-    for key, default, text in (("voice", "brand/voice.md", voice), ("audience", "brand/audience.md", audience)):
+    for (key, default, _), text in zip(PROFILES, (voice, audience)):
         if text is not None:
             p = _file(cfg, f"{key}_file", default)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +186,12 @@ never its words or footage):
         formula="{based_on.get('formula')}">
 {based_on.get('hook') or based_on.get('title')}
 </winner>"""
+        if based_on.get("breakdown"):
+            b = based_on["breakdown"]
+            model_block += (f"\nBreakdown of that winner: format {b['format']}; structure {b['structure']}; "
+                            f"CTA {b['cta']}; pace {b['pace']}.")
+        if based_on.get("shared"):
+            model_block += f"\nWhat the winners in this niche share: {based_on['shared']}"
     system = f"""You write shoot-ready short-form video scripts (Reels, TikTok, Shorts) for {brand}, in their own voice,
 for their audience. You never invent a number, result, client or source: when a figure is missing from the
 proof bank, write {{{{your number}}}} (or {{{{your result}}}}) so the creator fills it in.

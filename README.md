@@ -14,11 +14,23 @@ When OBS finishes a recording in the watched folder, the clipper:
 
 It runs on your Windows PC in the background. The review dashboard is at **http://127.0.0.1:8765**.
 
+It also edits any video you drop in, finds what's working in your niche, and writes scripts in your voice.
+Those parts came from the master-skills repo; **[MASTER-SKILLS.md](MASTER-SKILLS.md)** lists what was kept,
+what was adapted, and what was left out.
+
+**Setting it up for someone else?** Send them **[SETUP-FOR-A-FRIEND.md](SETUP-FOR-A-FRIEND.md)**. They
+download the zip from the Releases page, double-click `Install.bat`, and fill in **Settings → Make it yours**.
+Their name, keys and preferences stay on their PC.
+
 ---
 
 ## 1. Setup (once)
 
-You need **Python 3.11+**, **ffmpeg**, and **git** on Windows.
+**Easiest:** double-click **`Install.bat`** in the app folder. It installs Python and FFmpeg with winget if
+they're missing, installs the app, asks for your Claude key, and can start it at login. Then fill in
+**Settings → Make it yours** in the dashboard. Run it again after every update.
+
+By hand (needs **Python 3.11+**, **ffmpeg**, and **git** on Windows):
 
 ```powershell
 winget install Python.Python.3.12
@@ -131,7 +143,8 @@ Finish the stream. That's it. Roughly:
 1. Stream as normal. When the "Stream processed" notification arrives, open the dashboard.
 2. Look at **Stats → Score distribution** and **Would auto-post**. Ask: is the number of 90+ clips per
    stream sensible (say 1-4)? Are those genuinely your best moments? Watch a few in *Needs review*.
-3. If almost nothing reaches 90, or almost everything does, either edit `virality_criteria.md` (the
+3. If almost nothing reaches 90, or almost everything does, either edit the clip criteria in **Settings → Make it
+   yours** (saved as `my-criteria.md`; before setup it's `virality_criteria.md`) (the
    plain-English brief Claude scores against) or change `review.auto_post_threshold`.
    You can re-score a stream for cheap: the transcript is cached, so only the Claude step re-runs.
 4. When you're happy, set `review.dry_run: false` and restart the task (or reboot).
@@ -403,8 +416,8 @@ shootable (no blanks left) and leads with a payoff opens the script. Then timed 
 one comment-a-keyword CTA, caption, hashtags, cover and title, plus a LinkedIn version. Everything is timed at
 **your** pace (measured from your clips), cleaned of AI tells (one automatic rewrite if any are left), and never
 invents a number: unknowns stay as `{{your number}}` for you to fill in. Fill in **Your voice** once: **Build my
-voice from my clips** reads your best clips' transcripts and writes `brand\voice.md` with your real lines; add
-the numbers you'll say on camera under "Proof I can say out loud". `brand\audience.md` describes your one viewer
+voice from my clips** reads your best clips' transcripts and writes `brand\my-voice.md` with your real lines; add
+the numbers you'll say on camera under "Proof I can say out loud". `brand\my-audience.md` describes your one viewer
 and offer. Download or copy each script as Markdown. Each script costs one or two Claude calls.
 
 ---
@@ -426,7 +439,7 @@ kir perf-report
 ```
 
 The report shows median views per score band and how well the score predicts views. If the
-correlation is near zero, the score isn't predicting performance yet: adjust `virality_criteria.md`.
+correlation is near zero, the score isn't predicting performance yet: adjust the clip criteria (Settings → Make it yours).
 If higher bands clearly do better, move `auto_post_threshold` to where the drop-off is.
 
 The score measures structural quality (hook, payoff, length, topic). It can't see channel momentum or

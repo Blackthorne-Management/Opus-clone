@@ -295,7 +295,9 @@ def settings_for(cfg, recipe: dict) -> dict | None:
             "fillers": bool(cfg.get("jumpcut.fillers", True)),
             "retakes": str(cfg.get("jumpcut.retakes", "fuzzy")),
             "max_cut_ratio": float(cfg.get("jumpcut.max_cut_ratio", 0.4)),
-            "crossfade_ms": float(cfg.get("jumpcut.crossfade_ms", 30))}
+            "crossfade_ms": float(cfg.get("jumpcut.crossfade_ms", 30)),
+            # Cuts the owner unticked on the dashboard (their start times), so those moments stay in.
+            "keep": [float(t) for t in (recipe.get("jumpcut_keep") or [])]}
 
 
 def plan_from_levels(levels: list[float], words: list[dict], duration: float, fps: int, settings: dict) -> dict | None:
@@ -311,7 +313,8 @@ def plan_from_levels(levels: list[float], words: list[dict], duration: float, fp
         cuts = silence_cuts(levels, stats, words, duration, pace)
         cuts += transcript_cuts(words, FILLERS if settings["fillers"] else frozenset(), retakes,
                                 pad_before, pad_after, 0.0, duration)
-        cuts = [c for c in merge_cuts(cuts) if c["end"] - c["start"] >= min_cut]
+        cuts = [c for c in merge_cuts(cuts) if c["end"] - c["start"] >= min_cut
+                and not any(abs(c["start"] - k) < 0.2 for k in settings.get("keep", []))]
         if not cuts:
             return None
         frames = snap(keeps_from_cuts(cuts, 0.0, duration), fps, duration, min_keep=0.12)

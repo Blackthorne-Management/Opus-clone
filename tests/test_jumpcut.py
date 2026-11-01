@@ -138,3 +138,26 @@ def test_stop_motion_from_photos(tmp_path):
     info = media.probe(out)
     assert (info["width"], info["height"]) == (270, 480)
     assert abs(info["duration"] - 0.5) < 0.05       # 3 photos x 2 loops x 2 frames = 12 frames at 24 fps
+
+
+def test_unticked_cut_is_kept_on_rerender():
+    spans = [(0.5, 2.0), (3.5, 5.0), (6.5, 8.0)]
+    words = words_in(spans, [["one", "two"], ["three", "four"], ["five", "six"]])
+    first = jumpcut.plan_from_levels(levels_for(spans, 8.5), words, 8.5, 30, SETTINGS)
+    inner = [c for c in first["cuts"] if 1.9 < c["start"] < 2.5]
+    assert inner
+    again = jumpcut.plan_from_levels(levels_for(spans, 8.5), words, 8.5, 30,
+                                     {**SETTINGS, "keep": [round(inner[0]["start"], 2)]})
+    assert again["removed"] < first["removed"] - 1.0
+    assert not any(abs(c["start"] - inner[0]["start"]) < 0.2 for c in again["cuts"])
+
+
+def test_render_writes_srt_on_the_cut_timeline(cfg, tmp_path):
+    take = make_take(tmp_path / "take.mp4")
+    words = [{"w": f"w{i}", "s": 0.2 + i * 0.4, "e": 0.5 + i * 0.4} for i in range(4)] + \
+            [{"w": f"v{i}", "s": 3.7 + i * 0.4, "e": 4.0 + i * 0.4} for i in range(5)]
+    out = render_clip(cfg, take, {"start": 0.0, "end": 6.0}, words, default_recipe(cfg, {}), tmp_path / "o.mp4")
+    srt = out.with_suffix(".srt").read_text(encoding="utf-8")
+    assert srt.startswith("1\n00:00:00,") and "v0" in srt
+    last_end = srt.strip().splitlines()[-2].split(" --> ")[1]
+    assert last_end < "00:00:05,000"          # timed to the tightened clip, not the 6 s source

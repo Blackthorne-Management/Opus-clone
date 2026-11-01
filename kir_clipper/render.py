@@ -258,10 +258,24 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
                                        "text": c.get("text")} for c in cuts["cuts"]]}
     out_path.with_suffix(".recipe.json").write_text(json.dumps(recipe, indent=2), encoding="utf-8")
     out_path.with_suffix(".edit.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    out_path.with_suffix(".srt").write_text(srt_from_words(words, out_duration), encoding="utf-8")
     log.info("Rendered %s (%.1fs%s, %s, %s captions, %s zoom%s)", out_path.name, out_duration,
              f", {cuts['removed']:.1f}s cut" if cuts else "", recipe.get("crop_mode"), recipe.get("caption_style"),
              recipe.get("zoom"), ", stop motion" if recipe.get("stopmotion") else "")
     return out_path
+
+
+def srt_from_words(words: list[dict], duration: float) -> str:
+    """Plain SRT captions (1-3 word phrases) on the final timeline, for platforms that take a caption file."""
+    from .captions import group_words
+
+    def ts(t: float) -> str:
+        ms = int(round(max(0.0, t) * 1000))
+        return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+    out = []
+    for n, g in enumerate(group_words([w for w in words if w["s"] < duration], 3, 0.45, 18), 1):
+        out.append(f"{n}\n{ts(g[0]['s'])} --> {ts(min(duration, g[-1]['e'] + 0.1))}\n{' '.join(w['w'] for w in g)}\n")
+    return "\n".join(out)
 
 
 def edit_summary(out_path: Path) -> dict | None:
@@ -277,6 +291,8 @@ def edit_summary(out_path: Path) -> dict | None:
     return {"duration_in": rep["duration_in"], "duration_out": rep["duration_out"],
             "removed": (rep.get("jumpcut") or {}).get("removed", 0.0), "cuts": reasons,
             "pace": (rep.get("jumpcut") or {}).get("pace"),
+            "cut_list": [{"start": c["start"], "end": c["end"], "reason": c["reason"], "text": c.get("text")}
+                         for c in (rep.get("jumpcut") or {}).get("cuts", [])],
             "lufs": (a.get("measured") or {}).get("I"), "audio_note": a.get("note") or ""}
 
 

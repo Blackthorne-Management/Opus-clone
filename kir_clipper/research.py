@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import statistics
 import subprocess
 import sys
@@ -37,7 +38,7 @@ def add_posts(conn, text: str, source: str = "paste", creator: str = "", platfor
     except ValueError as exc:
         raise ValueError(f"Couldn't read that: {exc}") from exc
     defaults = {"channel": creator.strip() or None, "platform": platform.strip() or None}
-    existing_urls = {r["url"] for r in conn.execute("SELECT url FROM research_posts WHERE url IS NOT NULL")}
+    existing_urls = {collect.canon_url(r["url"]) for r in conn.execute("SELECT url FROM research_posts WHERE url IS NOT NULL")}
     existing_keys = {(_key(r["creator"]), (r["hook"] or r["title"] or "").lower())
                      for r in conn.execute("SELECT creator, hook, title FROM research_posts")}
     added = dup = skipped = 0
@@ -46,9 +47,10 @@ def add_posts(conn, text: str, source: str = "paste", creator: str = "", platfor
         if post is None:
             skipped += 1
             continue
-        url = collect.canon_url(post["url"]) if post["url"] else None
+        url = post["url"] or None
+        url_key = collect.canon_url(url) if url else None
         key = (_key(post["channel"]), (post["hook"] or post["title"] or "").lower())
-        if (url and url in existing_urls) or key in existing_keys:
+        if (url_key and url_key in existing_urls) or key in existing_keys:
             dup += 1
             continue
         conn.execute(
@@ -57,8 +59,8 @@ def add_posts(conn, text: str, source: str = "paste", creator: str = "", platfor
             (post["channel"], post["platform"], post["views"], post["likes"], post["comments"], post["hook"],
              post["title"], url, post["duration"], post["posted"], post["median"], source, db.iso(db.utcnow())))
         existing_keys.add(key)
-        if url:
-            existing_urls.add(url)
+        if url_key:
+            existing_urls.add(url_key)
         added += 1
     db.log_event(conn, "research_added", None, {"added": added, "duplicates": dup, "skipped": skipped, "source": source})
     return {"added": added, "duplicates": dup, "skipped": skipped}
@@ -165,3 +167,97 @@ def remove(conn, creator: str | None = None, post_id: int | None = None) -> int:
 def get_post(conn, post_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM research_posts WHERE id=?", (post_id,)).fetchone()
     return dict(row) if row else None
+
+
+# --------------------------------------------------------------------------- winner breakdown
+
+BREAKDOWN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "winners": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}, "format": {"type": "string"}, "structure": {"type": "string"},
+                           "cta": {"type": "string"}, "pace": {"type": "string"}},
+            "required": ["id", "format", "structure", "cta", "pace"], "additionalProperties": False}},
+        "shared": {"type": "string"},
+        "how_to_use_it": {"type": "string"},
+    },
+    "required": ["winners", "shared", "how_to_use_it"],
+    "additionalProperties": False,
+}
+
+
+def youtube_transcript(url: str, runner=None) -> str | None:
+    """Auto-captions of a public YouTube video as plain text (no login), or None."""
+    if not url or not re.search(r"(youtube\.com|youtu\.be)/", url) or (runner is None and not ytdlp_available()):
+        return None
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory(prefix="kir_subs_") as tmp:
+        cmd = [sys.executable, "-m", "yt_dlp", "--skip-download", "--write-auto-subs", "--write-subs",
+               "--sub-langs", "en.*,en", "--sub-format", "json3", "-o", str(Path(tmp) / "v.%(ext)s"), url]
+        run = runner or (lambda c: subprocess.run(c, capture_output=True, text=True, encoding="utf-8", timeout=120))
+        try:
+            proc = run(cmd)
+        except Exception:
+            return None
+        if getattr(proc, "returncode", 1) != 0:
+            return None
+        for f in sorted(Path(tmp).glob("*.json3")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except ValueError:
+                continue
+            text = " ".join(s.get("utf8", "") for e in data.get("events", []) for s in (e.get("segs") or []))
+            text = re.sub(r"\s+", " ", text).strip()
+            if text:
+                return text[:4000]
+    return None
+
+
+def breakdown(cfg, conn, llm, top: int = 5, min_multiple: float = 2.0, runner=None) -> dict:
+    """Break the top outliers down (format, structure, CTA, pace) and name the one thing they share."""
+    rep = outliers(conn, min_multiple=min_multiple, days=None, include_own=True)
+    picks = [o for o in rep["outliers"] if o.get("id")][:top]
+    if not picks:
+        raise ValueError("No outliers to break down yet. Add more posts first.")
+    rest = [o for o in outliers(conn, min_multiple=0, days=None)["outliers"]
+            if o.get("id") and o["id"] not in {p["id"] for p in picks}][:15]
+    blocks = []
+    for o in picks:
+        row = get_post(conn, o["id"]) or {}
+        transcript = youtube_transcript(o.get("url") or "", runner)
+        blocks.append(f'<winner id="{o["id"]}" creator="{o["creator"]}" views="{o["views"]}" '
+                      f'multiple="{o["multiple"]}" formula="{o["formula"]}" seconds="{row.get("duration") or "unknown"}">\n'
+                      f'hook/title: {o["hook"]}\n' + (f"transcript: {transcript}\n" if transcript else "") + "</winner>")
+    others = "\n".join(f'- {o["creator"]} ({o["multiple"]}x): {o["hook"]}' for o in rest) or "(none)"
+    result = llm(
+        f"You study short-form videos that beat their creator's usual views, for {cfg.get('brand.name', 'a creator')}.",
+        f"""These posts did far better than each creator's own median:
+
+{chr(10).join(blocks)}
+
+For comparison, ordinary posts from the same batch:
+{others}
+
+For each winner (by id) say: format (talking head, split screen, green screen, screen-share tutorial, listicle,
+skit, b-roll voice-over...; say "unknown" if the hook alone can't tell you), structure (which beats in what order:
+hook, proof, steps, rehook, payoff, CTA), the CTA (the exact ask and where it appears, or "unknown"), and pace
+(length and speed if known). Then `shared`: the ONE thing the winners share that the ordinary posts don't.
+`how_to_use_it`: one or two sentences on how this creator should use it. Only claim what the text supports;
+the formula is a judgement about the words, not proof of why a post got its views.""",
+        BREAKDOWN_SCHEMA)
+    by_id = {p["id"]: p for p in picks}
+    result["winners"] = [{**w, **{k: by_id[w["id"]][k] for k in ("creator", "hook", "multiple", "formula")}}
+                         for w in result["winners"] if w["id"] in by_id]
+    db.log_event(conn, "research_breakdown", None, {"winners": [p["id"] for p in picks]})
+    (cfg.data_dir / "research_breakdown.json").write_text(json.dumps(result), encoding="utf-8")
+    return result
+
+
+def last_breakdown(cfg) -> dict | None:
+    p = cfg.data_dir / "research_breakdown.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None

@@ -15,7 +15,7 @@ log = logging.getLogger("kir.notify")
 
 
 def notify(cfg: Config, subject: str, body: str, level: str = "info") -> None:
-    text = redact(f"[KIR clipper] {subject}\n{body}".strip())
+    text = redact(f"[{cfg.get('brand.name') or 'Auto'} clipper] {subject}\n{body}".strip())
     getattr(log, "warning" if level == "alert" else "info")(text.replace("\n", " | "))
     with open(cfg.data_dir / "notifications.log", "a", encoding="utf-8") as fh:
         fh.write(f"{db.iso(db.utcnow())} [{level}] {text}\n\n")

@@ -2,7 +2,7 @@
 
 Who you make videos for. The Script studio and Niche research read this. Ten minutes here decides
 whether a script lands for YOUR viewers or for everyone, which means no one. Edit it in the dashboard
-(Script studio -> Your audience) or here in Notepad.
+(Script studio -> Your audience). Your filled-in copy is saved as `brand/my-audience.md`; this file is the blank template.
 
 ## Niche
 
