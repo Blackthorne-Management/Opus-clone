@@ -32,6 +32,8 @@
   .row { display:flex; gap:8px; flex-wrap:wrap; }
   .row > * { flex:1; min-width:90px; }
   .btn { border:0; padding:8px 12px; border-radius:6px; cursor:pointer; font-weight:600; }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .tablewrap { overflow-x:auto; max-width:100%; }
   .approve { background:var(--ok); color:#fff; } .reject { background:var(--accent); color:#fff; } .plain { background:var(--line); color:var(--ink); }
   details summary { cursor:pointer; color:var(--muted); font-size:12px; }
   table { width:100%; border-collapse:collapse; background:var(--card); }
@@ -67,7 +69,7 @@
 </head>
 <body>
 <header>
-  <h1>KIR Clipper</h1>
+  <h1 id="apptitle">Clipper</h1>
   <span id="mode" class="pill"></span>
   <nav id="tabs"></nav>
 </header>
@@ -77,7 +79,8 @@
 <script>
 const TABS = [
   ["review", "Needs review"], ["dry_run", "Would auto-post"], ["approved,scheduled", "Scheduled"],
-  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["longform", "Long-form"], ["import", "Import posted reel"], ["posts", "Post calendar"],
+  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["edit", "Edit a video"], ["longform", "Long-form"],
+  ["research", "Niche research"], ["studio", "Script studio"], ["import", "Import posted reel"], ["posts", "Post calendar"],
   ["stats", "Stats"], ["events", "Activity log"], ["settings", "Settings"],
 ];
 function toast(msg, err = false) {
@@ -186,11 +189,13 @@ async function api(path, body) {
 }
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => {
-    const n = k.includes("posts")||k==="stats"||k==="events"||k==="longform"||k==="import"||k==="settings" ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
+    const n = k.includes("posts")||["stats","events","longform","import","settings","edit","research","studio"].includes(k) ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
     return `<button class="${k===current?"on":""}" data-k="${k}">${l}${n!==""?` (${n})`:""}</button>`;
   }).join("");
   $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { current = b.dataset.k; location.hash = current; load(); });
   renderStatus();
+  const title = (summary.brand ? summary.brand + " " : "") + "Clipper";
+  $("#apptitle").textContent = title; document.title = title;
   const m = $("#mode"); m.className = "pill " + (summary.dry_run ? "dry" : "live");
   m.textContent = summary.dry_run ? "DRY RUN: nothing posts" : "LIVE: auto-posting " + summary.auto_post_threshold + "+";
 }
@@ -202,6 +207,39 @@ function leadSel(v) {
   return `<select data-r="caption_lead" title="Shift every caption in this clip. Earlier if words show up after you say them; later if they show up before.">${
     LEADS.map(([n, l]) => `<option value="${n}" ${n === best[0] ? "selected" : ""}>${l}</option>`).join("")}</select>`;
 }
+// Local hook check (26-formula library + payoff rule). It flags weak hooks; it does not predict views.
+function hookBadge(h, label) {
+  if (!h) return "";
+  const cls = h.score >= 70 ? "s-hi" : h.score >= 50 ? "s-mid" : "s-lo";
+  const pay = h.payoff === "LEADS" ? `payoff leads (${esc(h.payoff_token)})` : h.payoff === "LATE" ? `payoff late (word ${h.payoff_word})` : "no number or payoff";
+  return `<div class="muted" title="Weakest check: ${esc(h.weakest)}${(h.flags||[]).length ? ". " + esc(h.flags.join("; ")) : ""}">${label}
+    <b class="${cls}">${Math.round(h.score)} ${esc(h.verdict)}</b> · ${esc(h.formula)} · ${pay}: ${esc(h.text)}</div>`;
+}
+function copyReport(r) {
+  if (!r || (!r.fixed && !(r.flags||[]).length)) return "";
+  return `<details><summary>AI-tell check: ${r.fixed ? `${r.fixed} fixed automatically` : "nothing to fix"}${(r.flags||[]).length ? ` · <b>${r.flags.length} to rewrite</b>` : ""}</summary>
+    ${(r.changes||[]).length ? `<div class="muted">Fixed: ${r.changes.map(esc).join(", ")}</div>` : ""}
+    ${(r.flags||[]).map(f => `<div><b>${esc(f.name)}</b> <span class="muted">${esc(f.fix)}</span></div>`).join("")}</details>`;
+}
+function editLine(e) {
+  if (!e) return "";
+  const names = {silence: "pause", filler: "um", retake: "retake"};
+  const cuts = Object.entries(e.cuts || {}).map(([k, n]) => `${n} ${names[k] || k}${n > 1 ? "s" : ""}`).join(", ");
+  return `<div class="muted">${e.removed ? `Tightened ${e.duration_in}s → ${e.duration_out}s (${cuts})` : "No jump cuts"}${
+    e.lufs != null ? ` · audio ${e.lufs} LUFS` : ""}${e.audio_note ? ` <span title="${esc(e.audio_note)}">ⓘ</span>` : ""}</div>`;
+}
+// Every jump cut on this clip; untick one to keep that moment in on the next re-render.
+function cutList(c) {
+  const made = ((c.checks || {}).edit || {}).cut_list || [], kept = (c.recipe || {}).jumpcut_keep || [];
+  if (!made.length && !kept.length) return "";
+  const names = {silence: "pause", filler: "um", retake: "retake"};
+  const row = (start, end, reason, text, on) => `<label style="color:var(--ink);display:flex;gap:6px;align-items:baseline">
+    <input type="checkbox" data-cut="${start}" ${on ? "checked" : ""} style="width:auto">
+    <span>${start.toFixed(1)}s${end != null ? `-${end.toFixed(1)}s` : ""} · ${esc(reason.split("+").map(r => names[r] || r).join(" + "))}${text ? `: <i>${esc(text)}</i>` : ""}</span></label>`;
+  return `<details><summary>Jump cuts (${made.length}): untick any you want to keep, then Re-render</summary>
+    ${made.map(x => row(x.start, x.end, x.reason, x.text, true)).join("")}
+    ${kept.map(t => row(Number(t), null, "kept by you", "", false)).join("")}</details>`;
+}
 function clipCard(c) {
   const styles = ["hormozi","bold_pop","karaoke","boxed","minimal"], crops = ["face","center","blur_pad"], zooms = ["none","punch","slow_push"];
   const r = c.recipe || {};
@@ -211,10 +249,13 @@ function clipCard(c) {
   return `<div class="card" data-id="${c.id}">
     ${c.file_path ? `<video src="/media/clip/${c.id}" controls preload="metadata"></video>` : `<div class="muted" style="width:200px">not rendered</div>`}
     <div class="body">
-      <div class="row" style="align-items:baseline">${r.imported ? `<span class="pill" style="background:var(--line);color:var(--ink)">Imported reel</span>`
-        : `<span class="score ${scoreClass(c.score)}">${c.score}</span>`}
+      <div class="row" style="align-items:baseline">${r.photos ? `<span class="pill" style="background:var(--line);color:var(--ink)">Stop motion from photos</span>`
+        : r.imported ? `<span class="pill" style="background:var(--line);color:var(--ink)">Imported reel</span>`
+        : r.upload && !c.score ? `<span class="pill" style="background:var(--line);color:var(--ink)">Your upload</span>`
+        : `<span class="score ${scoreClass(c.score)}">${c.score}</span>${r.upload ? ` <span class="pill" style="background:var(--line);color:var(--ink)">Your upload</span>` : ""}`}
         <span class="muted">clip ${c.id}${c.version>1?` · re-edit v${c.version} of ${c.parent_clip_id}`:""} · ${c.duration}s · ${c.status}${c.note?` · ${esc(c.note)}`:""}</span></div>
       <div><b>Hook:</b> ${esc(c.hook)}</div>
+      ${c.checks ? hookBadge(c.checks.hook, "On-screen hook A") + hookBadge(c.checks.hook_alt, "Hook B") + copyReport(c.checks.copy) + editLine(c.checks.edit) : ""}
       <div class="muted">${esc(c.reason)}</div>
       ${c.suggested_time ? `<div class="muted">Next free slot: ${when(c.suggested_time)}</div>` : ""}
       ${c.timeline && c.timeline.length ? planList(c.timeline) : posts ? `<div class="muted">${posts}</div>` : ""}
@@ -226,7 +267,13 @@ function clipCard(c) {
          <label>${p} caption<textarea data-p="${p}" data-k="caption">${esc(v.caption)}</textarea></label>`).join("")}</details>
       ${r.imported ? "" : `<details><summary>Re-render (style, crop, zoom, timing)</summary>
         <div class="row">${sel("caption_style", styles, r.caption_style)}${sel("crop_mode", crops, r.crop_mode)}${sel("zoom", zooms, r.zoom)}</div>
-        <div class="row"><label>Caption timing ${leadSel(r.caption_lead)}</label></div>
+        <div class="row"><label>Caption timing ${leadSel(r.caption_lead)}</label>
+          <label title="Cut pauses, ums and repeated lines inside the clip">Jump cuts ${sel("jumpcut", ["tight","normal","loose","off"], r.jumpcut || "tight")}</label></div>
+        <div class="row"><label>Stop motion <select data-sm="look">${["","classic","clay","poster","pixel"].map(o =>
+            `<option value="${o}" ${(r.stopmotion||{}).look===o||(!r.stopmotion&&!o)?"selected":""}>${o||"off"}</option>`).join("")}</select></label>
+          <label>Drawings per second <select data-sm="fps">${[12,10,8].map(o =>
+            `<option ${(r.stopmotion||{}).fps===o?"selected":""}>${o}</option>`).join("")}</select></label></div>
+        ${cutList(c)}
         <div class="row"><label>Start (s)<input data-b="start" value="${c.start}"></label><label>End (s)<input data-b="end" value="${c.end}"></label>
           <label>Hook overlay<input data-r="hook_text" value="${esc(r.hook_text)}"></label></div>
         <button class="btn plain" data-a="render">Re-render</button>
@@ -234,6 +281,7 @@ function clipCard(c) {
       <div class="row">
         ${canAct ? `<button class="btn approve" data-a="approve">Approve &amp; schedule</button>` : ""}
         <button class="btn plain" data-a="save">Save copy</button>
+        ${c.file_path && !r.imported ? `<a class="btn plain" href="/media/clip/${c.id}/srt" download title="Caption file (.srt) for YouTube or anywhere that takes one">Captions .srt</a>` : ""}
         ${c.status !== "rejected" && !["posted","scheduled"].includes(c.status) ? `<button class="btn reject" data-a="reject">Reject</button>` : ""}
         ${c.status === "posted" ? `<select data-a="flag"><option value="">Repost: automatic</option><option value="no_repost" ${c.note==="no_repost"?"selected":""}>Never repost</option><option value="force_repost" ${c.note==="force_repost"?"selected":""}>Always repost</option></select>` : ""}
       </div>
@@ -260,6 +308,9 @@ function wire() {
         if (a === "save") { await api(`/api/clips/${id}/edit`, collect(card)); toast("Saved"); }
         if (a === "render") {
           const recipe = {}; card.querySelectorAll("[data-r]").forEach(el => recipe[el.dataset.r] = el.value);
+          const look = $("[data-sm=look]", card).value;
+          recipe.stopmotion = look ? {look, fps: Number($("[data-sm=fps]", card).value)} : null;
+          recipe.jumpcut_keep = [...card.querySelectorAll("[data-cut]")].filter(x => !x.checked).map(x => Number(x.dataset.cut));
           const body = {...collect(card), recipe}; card.querySelectorAll("[data-b]").forEach(el => body[el.dataset.b] = el.value);
           b.textContent = "Rendering..."; await api(`/api/clips/${id}/edit`, body);
         }
@@ -279,10 +330,16 @@ async function load() {
     (toggle "Trial" on the share screen), then tap <b>Mark posted</b>.
     <span class="muted">iPhone: after Download, tap the share icon and choose Save Video so Instagram can see it.
     Android: it goes to your Downloads folder.</span></div>` : "";
-  root.innerHTML = banner;
+  const setupBanner = !summary.setup_done && current !== "settings" ? `<div class="card" style="display:block;border-color:var(--warn);margin-bottom:16px">
+    <b>First time here?</b> This copy is still set up for <b>${esc(summary.brand || "someone else")}</b>.
+    Open <a href="#settings">Settings → Make it yours</a> to add your name, time zone, recordings folder and what makes a good clip for you.</div>` : "";
+  root.innerHTML = setupBanner + banner;
   const v = document.createElement("div"); root.appendChild(v);
   if (current === "longform") { await renderLongform(v); return; }
   if (current === "import") { renderImport(v); return; }
+  if (current === "edit") { await renderEdit(v); return; }
+  if (current === "research") { await renderResearch(v); return; }
+  if (current === "studio") { await renderStudio(v); return; }
   if (current === "settings") { await renderSettings(v); return; }
   if (current === "stats") {
     const h = summary.histogram, max = Math.max(1, ...h);
@@ -479,6 +536,36 @@ const SETTING_GROUPS = [
 const CHOICE_LABELS = {manual: "Post by hand (reminder)", api: "Automatic (Upload-Post)", skip: "Don't make trial reels",
   reedit: "New edit each time", same: "Same file",
   background: "AI background + channel template (most consistent)", full: "Full AI design (uses your photos)"};
+async function renderSetup(el) {
+  const s = await api("/api/setup");
+  const tzGuess = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  // Before setup the values belong to whoever made this copy: show them as examples, not answers.
+  const mine = k => s.done ? esc(s[k]) : "", eg = (k, fallback) => esc(s.done ? fallback : (s[k] || fallback));
+  el.innerHTML = `<section><h3>Make it yours${s.done ? "" : ' <span class="pill dry">not done yet</span>'}</h3>
+    <p class="muted">Who this clipper works for. Saved on this PC only (config.local.yaml and my-criteria.md), so app updates never overwrite it.</p>
+    <form id="setupform">
+      <div class="row"><label>Your creator name or handle<input name="name" value="${mine("name")}" placeholder="${eg("name", "@yourhandle")}" required></label>
+        <label>Time zone (posting times use it)<input name="timezone" value="${s.done ? esc(s.timezone) : esc(tzGuess)}" placeholder="America/New_York"></label></div>
+      <label>Call to action shown at the end of clips<input name="cta_text" value="${mine("cta_text")}" placeholder="${eg("cta_text", "Follow @you for more")}"></label>
+      <div class="row"><label>Folder OBS records into<input name="inbox" value="${esc(s.inbox)}"></label>
+        <label>Upload-Post profile name (blank until you set up posting)<input name="upload_post_user" value="${mine("upload_post_user")}" placeholder="${eg("upload_post_user", "")}"></label></div>
+      <label>Your logo for the watermark (PNG, optional)${s.has_logo ? " · a logo is already set" : ""}<input type="file" name="logo" accept="image/png"></label>
+      <details ${s.done ? "" : "open"}><summary>What makes a good clip for you (Claude reads this for every stream)</summary>
+        ${s.done ? "" : `<div class="row"><label>What you stream about<input name="topics" placeholder="e.g. Fortnite tips, gym, money, dating advice"></label>
+          <label>What your viewers come for<input name="wants" placeholder="e.g. big plays, honest advice, laughs"></label></div>
+          <p class="muted">Leave the box below empty and a starter version is written from these two answers. You can edit it any time.</p>`}
+        <textarea name="criteria" style="min-height:220px;font-family:ui-monospace,monospace;font-size:12px">${s.done ? esc(s.criteria) : ""}</textarea></details>
+      <div class="row" style="margin-top:10px"><button class="btn approve" type="submit">Save my details</button></div>
+    </form></section>`;
+  $("#setupform", el).onsubmit = async e => {
+    e.preventDefault();
+    const r = await fetch("/api/setup", {method: "POST", body: new FormData(e.target)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.detail || "Couldn't save", true); return; }
+    toast(j.restart ? "Saved. Restart the app so it watches the new recordings folder." : "Saved. This clipper is yours now.");
+    load();
+  };
+}
 async function renderSettings(v) {
   const data = await api("/api/settings"), f = data.fields;
   const input = (k) => {
@@ -490,12 +577,13 @@ async function renderSettings(v) {
     if (x.type === "list") return `<input data-k="${k}" value="${esc((val||[]).join(", "))}">`;
     return `<input data-k="${k}" value="${esc(val ?? "")}" ${k.endsWith("pin") ? 'inputmode="numeric" autocomplete="off"' : ""}>`;
   };
-  v.innerHTML = `<div class="settings" style="max-width:820px">
+  v.innerHTML = `<div class="settings" style="max-width:820px"><div id="setupbox"></div>
     ${SETTING_GROUPS.map(([title, keys]) => `<section><h3>${title}</h3>${keys.map(k => `<div class="setting"><span>${esc(f[k].help)}</span>${input(k)}</div>`).join("")}
       ${title === "Phone access" ? `<p class="muted">${data.phone_url ? `On your phone (same Wi-Fi) open <b>${esc(data.phone_url)}</b> and enter the PIN.`
         : "Turn this on and set a PIN, then restart the app. Windows may ask to allow the connection the first time: choose Private networks."}</p>` : ""}</section>`).join("")}
     <button class="btn approve" id="savesettings">Save changes</button>
-    <p class="muted">Saved to config.local.yaml. Everything else (folders, brand, API keys) is in config.yaml and .env.</p></div>`;
+    <p class="muted">Saved to config.local.yaml. API keys live in the .env file in the app folder.</p></div>`;
+  renderSetup($("#setupbox", v));
   $("#savesettings", v).onclick = async () => {
     const changes = {};
     v.querySelectorAll("[data-k]").forEach(el => {
@@ -621,6 +709,235 @@ function renderImport(v) {
       form.reset(); form.posted_at.value = localNow(); updateDue(); acknowledged = false;
     } finally { btn.disabled = false; btn.textContent = "Import and schedule"; }
   };
+}
+// ---------------------------------------------------------------- edit a video
+let editTimer = null;
+const STYLES = ["hormozi","bold_pop","karaoke","boxed","minimal"];
+async function renderEdit(v) {
+  clearTimeout(editTimer);
+  const d = await api("/api/edits");
+  const opt = (name, opts, sel, labels) => `<select name="${name}">${opts.map((o, i) => `<option value="${o}" ${o===sel?"selected":""}>${labels ? labels[i] : (o || "default")}</option>`).join("")}</select>`;
+  v.innerHTML = `<div class="card" style="display:block;max-width:820px">
+    <h3 style="margin-top:0">Edit a video</h3>
+    <p class="muted">Drop in a raw take (phone video, a reel you recorded) and get a postable 9:16 edit: pauses, ums and
+      repeated lines cut, captions word by word, the hook on screen, audio mastered. Or add photos to make a stop-motion video.
+      The result waits in <a href="#review">Needs review</a>, where you can re-render it and schedule it like any clip.</p>
+    ${d.transcription ? "" : `<p class="s-mid"><b>Transcription isn't installed on this PC</b>, so videos get no captions or jump cuts. Run scripts\\install.ps1 again.</p>`}
+    <form id="edform">
+      <label>Video, or photos for stop motion<input type="file" name="files" accept="video/*,image/*" multiple required></label>
+      <div id="edvideo">
+        <div class="row"><label>Jump cuts${opt("pace", ["tight","normal","loose","off"], "tight", ["Tight (shorts)","Normal","Loose (talks)","Off"])}</label>
+          <label>Caption style${opt("caption_style", ["", ...STYLES], "")}</label>
+          <label>Framing${opt("crop_mode", ["", "face", "center", "blur_pad"], "", ["default", "follow my face", "center", "fit with blurred background"])}</label></div>
+        <div class="row"><label>Stop-motion look (optional)${opt("look", ["", "classic", "clay", "poster", "pixel"], "", ["off", "classic wobble", "clay", "poster (paper cut-out)", "pixel"])}</label>
+          <label>Drawings per second${opt("fps", ["12","10","8"], "12")}</label></div>
+        <label style="color:var(--ink)"><input type="checkbox" name="write_copy" ${d.claude ? "checked" : "disabled"} style="width:auto">
+          Let Claude write the hook, title, captions and hashtags${d.claude ? "" : " (needs ANTHROPIC_API_KEY)"}</label>
+      </div>
+      <div id="edphotos" hidden>
+        <div class="row"><label>Look${opt("plook", ["classic","clay","poster","pixel"], "classic")}</label>
+          <label>Drawings per second${opt("pfps", ["12","10","8"], "12")}</label>
+          <label>Hold each photo (frames)${opt("hold", ["1","2","3"], "2", ["1 (fast)","2 (on twos)","3 (slow)"])}</label></div>
+        <div class="row"><label>Play it${opt("loop", ["1","2","3","4"], "1", ["once","twice","3 times","4 times"])}</label>
+          <label>Fit photos${opt("fit", ["cover","contain"], "cover", ["fill the frame","whole photo"])}</label>
+          <label style="color:var(--ink)"><input type="checkbox" name="pingpong" style="width:auto"> Forward then backward</label></div>
+        <label>Sound or voice-over (optional)<input type="file" name="sound" accept="audio/*,video/*"></label>
+      </div>
+      <label>Hook on screen for the first 2 seconds (optional${d.claude ? "; Claude writes one if blank" : ""})<input name="hook_text" maxlength="80"></label>
+      <label>Title (optional)<input name="title"></label>
+      <label>Caption (optional)<textarea name="caption"></textarea></label>
+      <div class="row" style="margin-top:12px"><button class="btn approve" type="submit">Edit it</button></div>
+    </form></div>
+    <h3>Your edits</h3>
+    ${d.edits.length ? `<div class="tablewrap"><table>${d.edits.map(e => `<tr><td>${e.id}</td><td>${esc(e.name)}<br><span class="muted">${e.kind === "photos" ? "stop motion" : `jump cuts ${esc(e.options.pace)}${e.options.stopmotion ? ` · ${esc(e.options.stopmotion.look)} stop motion` : ""}`}</span></td>
+      <td>${{queued: "waiting", working: "editing...", ready: "<b>ready</b>", failed: "<b class='s-lo'>failed</b>"}[e.status] || e.status}${e.error ? `<br><span class="muted">${esc(e.error)}</span>` : ""}
+        ${e.clip && e.clip.checks ? editLine(e.clip.checks.edit) : ""}</td>
+      <td>${e.clip ? `<video src="/media/clip/${e.clip.id}" controls preload="metadata" style="width:110px"></video>` : ""}</td>
+      <td>${e.clip ? `<a class="btn plain" href="#${e.clip.status === "review" ? "review" : e.clip.status}">Open in ${e.clip.status === "review" ? "Needs review" : esc(e.clip.status)}</a>` : ""}
+        ${e.status === "failed" ? `<button class="btn plain" data-retry="${e.id}">Try again</button>` : ""}</td></tr>`).join("")}</table></div>`
+      : `<div class="empty">Nothing edited yet.</div>`}`;
+  const form = $("#edform", v);
+  const isPhotos = () => [...form.files.files].some(f => f.type.startsWith("image/"));
+  form.files.onchange = () => { $("#edphotos", v).hidden = !isPhotos(); $("#edvideo", v).hidden = isPhotos(); };
+  v.querySelectorAll("[data-retry]").forEach(b => b.onclick = () => api(`/api/edits/${b.dataset.retry}/retry`, {}).then(load));
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const photos = isPhotos(), f = form;
+    const options = photos ? {look: f.plook.value, fps: Number(f.pfps.value), hold: Number(f.hold.value), loop: Number(f.loop.value),
+        pingpong: f.pingpong.checked, fit: f.fit.value}
+      : {pace: f.pace.value, caption_style: f.caption_style.value, crop_mode: f.crop_mode.value, write_copy: f.write_copy.checked,
+         stopmotion: f.look.value ? {look: f.look.value, fps: Number(f.fps.value)} : null};
+    Object.assign(options, {hook_text: f.hook_text.value, title: f.title.value, caption: f.caption.value});
+    const fd = new FormData();
+    [...f.files.files].forEach(x => fd.append("files", x));
+    if (photos && f.sound.files[0]) fd.append("sound", f.sound.files[0]);
+    fd.append("options", JSON.stringify(options));
+    const btn = form.querySelector("button[type=submit]"); btn.disabled = true; btn.textContent = "Uploading...";
+    try {
+      const r = await fetch("/api/edits", {method: "POST", body: fd});
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(j.detail || "Upload failed", true); return; }
+      toast("Uploaded. Editing in the background; it shows up in Needs review when it's done.");
+      load();
+    } finally { btn.disabled = false; btn.textContent = "Edit it"; }
+  };
+  if (d.edits.some(e => ["queued", "working"].includes(e.status))) editTimer = setTimeout(() => current === "edit" && load(), 8000);
+}
+
+// ---------------------------------------------------------------- niche research
+async function renderResearch(v) {
+  const minX = Number(sessionStorage.getItem("rs_min") || 2), days = Number(sessionStorage.getItem("rs_days") || 90);
+  const [d, bd] = await Promise.all([api(`/api/research?min=${minX}&days=${days}&own=1`), api("/api/research/breakdown")]);
+  const fmtV = n => n == null ? "" : Number(n).toLocaleString();
+  v.innerHTML = `<div class="card" style="display:block;max-width:980px">
+    <h3 style="margin-top:0">Niche research: what's already working</h3>
+    <p class="muted">Add posts from creators in your niche (and the app adds your own results). Every post is ranked by its views as a
+      multiple of <b>that creator's own median</b>, so a small account's breakout beats a big account's normal day. A creator needs 4+ posts.
+      Nothing here logs in or scrapes behind a login: paste numbers off your screen, upload a CSV, or fetch a public YouTube Shorts tab.</p>
+    <form id="rsadd">
+      <label>Paste posts, one per line: <code>creator | views | hook or title | url | length | date</code> (only the first three are needed)
+        <textarea name="text" placeholder="@coachname | 1.2M | I paid off $40k in 11 months | https://... | 0:41 | 2026-10-01" style="min-height:90px"></textarea></label>
+      <div class="row"><label>...or a CSV / yt-dlp JSON file<input type="file" name="file" accept=".csv,.tsv,.json,.txt"></label>
+        <label>Creator (if the rows don't say)<input name="creator"></label>
+        <label>Platform<select name="platform"><option value="">auto</option><option>tiktok</option><option>instagram</option><option>shorts</option><option>linkedin</option></select></label></div>
+      <div class="row"><button class="btn approve" type="submit">Add posts</button></div>
+    </form>
+    ${d.ytdlp ? `<form id="rsfetch" class="row" style="margin-top:10px;align-items:end"><label>Public YouTube channel (@handle or link)<input name="channel" placeholder="@somecreator"></label>
+        <label style="flex:0 0 120px">Latest<select name="limit"><option>20</option><option selected>40</option><option>80</option></select></label>
+        <button class="btn plain" type="submit" style="flex:0 0 auto">Fetch Shorts</button></form>`
+      : `<p class="muted">To fetch public YouTube Shorts automatically, install yt-dlp: <code>.venv\\Scripts\\python -m pip install yt-dlp</code></p>`}
+  </div>
+  <div class="row" style="align-items:end;max-width:980px;margin:14px 0 6px">
+    <label>Outliers at<select id="rsmin">${[1.5, 2, 3, 5].map(x => `<option value="${x}" ${x===minX?"selected":""}>${x}x their median or better</option>`).join("")}</select></label>
+    <label>From the last<select id="rsdays">${[[30,"30 days"],[90,"90 days"],[365,"year"],[0,"any time"]].map(([x,l]) => `<option value="${x}" ${x===days?"selected":""}>${l}</option>`).join("")}</select></label>
+  </div>
+  <p class="muted">${d.posts} posts from ${d.creators.length} creator${d.creators.length===1?"":"s"}: <b>${esc(d.evidence)}</b>${d.posts < 30 ? " (aim for 30+ posts across 6+ creators)" : ""}.
+    ${d.thin.length ? `Skipped (under 4 posts): ${d.thin.map(t => `${esc(t.creator)} (${t.posts})`).join(", ")}.` : ""}</p>
+  ${d.formulas.length ? `<p>Formulas among the outliers: ${d.formulas.map(([f, n]) => `<b>${esc(f)}</b> ×${n}`).join(" · ")}
+    <span class="muted">(a judgement about the words, not proof of why they worked)</span></p>` : ""}
+  ${d.outliers.length ? `<div class="tablewrap"><table><tr><th>×median</th><th>views</th><th>creator</th><th>hook</th><th>formula</th><th></th></tr>${d.outliers.map(o => `<tr>
+      <td><b>${o.multiple}x</b></td><td>${fmtV(o.views)}<br><span class="muted">median ${fmtV(o.median)}</span></td>
+      <td>${esc(o.creator)}${o.own ? ' <span class="pill live">you</span>' : ""}</td>
+      <td>${/^https?:\/\//i.test(o.url || "") ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">${esc(o.hook)}</a>` : esc(o.hook)}</td><td>${esc(o.formula)}</td>
+      <td>${o.id ? `<button class="btn plain" data-script="${o.id}">Write my version</button>` : ""}</td></tr>`).join("")}</table></div>`
+    : `<div class="empty">No outliers yet. Add at least 4 posts for each of a few creators.</div>`}
+  ${d.outliers.length ? `<div class="row" style="max-width:980px;margin-top:10px"><button class="btn plain" id="rsbreak">Break the winners down (Claude)</button></div>` : ""}
+  ${bd && bd.shared ? `<div class="card" style="display:block;max-width:980px;margin-top:10px"><b>What the winners share:</b> ${esc(bd.shared)}
+    <p>${esc(bd.how_to_use_it)}</p><div class="tablewrap"><table><tr><th>creator</th><th>hook</th><th>format</th><th>structure</th><th>CTA</th><th>pace</th></tr>
+    ${bd.winners.map(w => `<tr><td>${esc(w.creator)}<br><span class="muted">${w.multiple}x</span></td><td>${esc(w.hook)}</td><td>${esc(w.format)}</td>
+      <td>${esc(w.structure)}</td><td>${esc(w.cta)}</td><td>${esc(w.pace)}</td></tr>`).join("")}</table></div>
+    <p class="muted">"Write my version" on a winner uses this breakdown. Formats decay: redo this monthly.</p></div>` : ""}
+  ${d.creators.length ? `<details style="margin-top:12px"><summary>Creators (${d.creators.length})</summary><table>${d.creators.map(c =>
+    `<tr><td>${esc(c.creator)}</td><td>${c.posts} posts</td><td>median ${fmtV(c.median)}</td><td>${c.creator.startsWith("You · ") ? "" :
+      `<button class="btn plain" data-rmcreator="${esc(c.creator)}">Remove</button>`}</td></tr>`).join("")}</table></details>` : ""}`;
+  $("#rsmin", v).onchange = e => { sessionStorage.setItem("rs_min", e.target.value); load(); };
+  $("#rsdays", v).onchange = e => { sessionStorage.setItem("rs_days", e.target.value); load(); };
+  $("#rsadd", v).onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const r = await fetch("/api/research/add", {method: "POST", body: fd});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.detail || "Couldn't add those", true); return; }
+    toast(`Added ${j.added} post${j.added===1?"":"s"}${j.duplicates ? `, ${j.duplicates} already there` : ""}${j.skipped ? `, ${j.skipped} unreadable` : ""}`);
+    load();
+  };
+  const fetchForm = $("#rsfetch", v);
+  if (fetchForm) fetchForm.onsubmit = async e => {
+    e.preventDefault();
+    const btn = fetchForm.querySelector("button"); btn.disabled = true; btn.textContent = "Fetching...";
+    try { const j = await api("/api/research/fetch", {channel: fetchForm.channel.value, limit: Number(fetchForm.limit.value)});
+      toast(`Added ${j.added} Shorts${j.duplicates ? `, ${j.duplicates} already there` : ""}`); load(); }
+    finally { btn.disabled = false; btn.textContent = "Fetch Shorts"; }
+  };
+  const brk = $("#rsbreak", v);
+  if (brk) brk.onclick = async () => {
+    brk.disabled = true; brk.textContent = "Reading the winners (up to a minute)...";
+    try { await api("/api/research/breakdown", {min: minX}); load(); }
+    finally { brk.disabled = false; brk.textContent = "Break the winners down (Claude)"; }
+  };
+  v.querySelectorAll("[data-rmcreator]").forEach(b => b.onclick = () => api("/api/research/remove", {creator: b.dataset.rmcreator}).then(load));
+  v.querySelectorAll("[data-script]").forEach(b => b.onclick = async () => {
+    const idea = await modal(`<h3>Write your version</h3><p>Claude copies this post's <b>structure</b> (not its words) and writes it in your voice
+      for your audience. Add what actually happened to you, so the hook carries your real number.</p>
+      <label>Your angle (optional)<textarea id="idea" placeholder="e.g. how I went from 0 to 5am wake-ups in 30 days and paid off $12k"></textarea></label>`,
+      [{label: "Write it", value: true, kind: "approve"}, {label: "Cancel", value: false}]);
+    if (!idea) return;
+    await api("/api/studio/scripts", {research_id: Number(b.dataset.script), idea: modal.fields.idea});
+    toast("Writing... it appears in the Script studio in about a minute.");
+    current = "studio"; location.hash = "studio"; load();
+  });
+}
+
+// ---------------------------------------------------------------- script studio
+let studioTimer = null;
+function scriptCard(s) {
+  const sc = s.script;
+  if (s.status === "writing") return `<div class="card" style="display:block"><b>${esc(s.idea)}</b><p class="muted">Writing... (about a minute)</p></div>`;
+  if (s.status === "failed") return `<div class="card" style="display:block"><b>${esc(s.idea)}</b><p class="s-lo">Failed: ${esc(s.error)}</p></div>`;
+  const h = sc.hooks[sc.chosen_hook] || {};
+  return `<div class="card" style="display:block" data-sid="${s.id}">
+    <div class="row" style="align-items:baseline"><b style="flex:3">${esc(sc.working_title || sc.title)}</b>
+      <span class="muted">${sc.length}s at ${Math.round(sc.wpm)} wpm · keyword <b>${esc(sc.keyword)}</b>${s.status === "shot" ? " · shot" : ""}</span></div>
+    ${s.based_on ? `<div class="muted">Modelled on ${esc(s.based_on.creator)}: "${esc(s.based_on.hook)}"${s.based_on.multiple ? ` (${s.based_on.multiple}x their median, ${esc(s.based_on.formula)})` : ""}</div>` : ""}
+    ${sc.placeholders.length ? `<p class="s-mid"><b>Fill in before shooting:</b> ${sc.placeholders.map(esc).join(", ")}</p>` : ""}
+    <div class="tablewrap"><table style="margin:8px 0"><tr><th>hook</th><th>formula</th><th>spoken</th><th>on screen</th></tr>${sc.hooks.map((o, i) =>
+      `<tr${i === sc.chosen_hook ? ' style="font-weight:700"' : ""}><td class="${o.score >= 70 ? "s-hi" : o.score >= 50 ? "s-mid" : "s-lo"}">${Math.round(o.score)} ${esc(o.verdict)}<br><span class="muted">payoff ${esc(o.payoff)}</span></td>
+        <td>${esc(o.formula)}</td><td>${esc(o.spoken)}</td><td>${esc(o.on_screen)}</td></tr>`).join("")}</table></div>
+    ${sc.beats.map((b, i) => `<div style="margin:8px 0"><b>${i + 1}. ${esc(b.label)}</b> <span class="muted">${esc(b.timecode)}</span><br>
+      <span class="muted">SAY</span> ${esc(b.say)}<br><span class="muted">SCREEN</span> ${esc(b.screen)}<br><span class="muted">VISUAL</span> ${esc(b.visual)}</div>`).join("")}
+    <details><summary>Caption, hashtags, cover${sc.linkedin ? ", LinkedIn" : ""}</summary>
+      <pre>${esc(sc.caption)}\n\n${esc(sc.hashtags.join(" "))}\n\nCOVER: ${esc(sc.cover)}\nTITLE: ${esc(sc.title)}</pre>
+      <div class="muted">Title check ${sc.title_check.score}/100${(sc.title_check.issues||[]).length ? ": " + sc.title_check.issues.map(esc).join("; ") : ""}</div>
+      ${sc.linkedin ? `<pre>${esc(sc.linkedin)}</pre>` : ""}</details>
+    <div class="muted">${sc.human ? `Reads as human: ${sc.human.score} ${esc(sc.human.verdict)}` : ""}${(sc.flags||[]).length ? ` · <b>${sc.flags.length} line${sc.flags.length>1?"s":""} still sound machine-written</b>: ${sc.flags.map(f => esc(f.name)).join(", ")}` : ""}
+      ${sc.why_it_works ? `<br>Why it should work: ${esc(sc.why_it_works)}` : ""}</div>
+    <div class="row" style="margin-top:8px"><a class="btn plain" href="/api/studio/scripts/${s.id}.md" download>Download script</a>
+      <button class="btn plain" data-copy="${s.id}">Copy script</button>
+      ${s.status !== "shot" ? `<button class="btn approve" data-shot="${s.id}">I shot it</button>` : ""}</div></div>`;
+}
+async function renderStudio(v) {
+  clearTimeout(studioTimer);
+  const d = await api("/api/studio");
+  v.innerHTML = `<div class="card" style="display:block;max-width:980px">
+    <h3 style="margin-top:0">Script studio</h3>
+    <p class="muted">Shoot-ready scripts for new videos, in your voice: five hooks on five formulas (the best one with a real payoff opens),
+      timed beats with what to say, show and film, one comment-keyword CTA, caption, cover and title. Unknown numbers stay as
+      {{your number}}: nothing is invented. Pace: <b>${Math.round(d.wpm)} wpm</b> (from your voice file or measured from your clips).</p>
+    ${d.claude ? "" : `<p class="s-lo">The studio needs ANTHROPIC_API_KEY in .env.</p>`}
+    <form id="stnew"><label>The idea (what happened, to whom, what it cost or returned)<textarea name="idea" placeholder="e.g. I stopped checking my phone for the first hour of the day for 30 days; here's what changed"></textarea></label>
+      <div class="row"><button class="btn approve" type="submit" ${d.claude ? "" : "disabled"}>Write the script</button>
+        <a class="btn plain" href="#research" style="text-align:center">Or start from a winner in Niche research</a></div></form>
+    <details style="margin-top:12px"><summary>Your voice (how you talk, your proof bank)</summary>
+      <p class="muted">Every script is written in this voice. <b>Build my voice from my clips</b> reads your best clips' transcripts and fills it in with your real lines.
+        Add real numbers you'll say on camera under "Proof I can say out loud".</p>
+      <textarea id="stvoice" style="min-height:260px;font-family:ui-monospace,monospace;font-size:12px">${esc(d.profile.voice)}</textarea>
+      <label>Optional: paste 3-5 of your own captions to help it<textarea id="stsamples"></textarea></label>
+      <div class="row"><button class="btn plain" id="stvoicebuild" ${d.claude ? "" : "disabled"}>Build my voice from my clips</button>
+        <button class="btn approve" id="stvoicesave">Save voice</button></div></details>
+    <details style="margin-top:8px"><summary>Your audience (the one viewer, your offer, who to watch)</summary>
+      <textarea id="staud" style="min-height:220px;font-family:ui-monospace,monospace;font-size:12px">${esc(d.profile.audience)}</textarea>
+      <div class="row"><button class="btn approve" id="staudsave">Save audience</button></div></details></div>
+  <h3>Scripts</h3>
+  ${d.scripts.length ? `<div class="grid">${d.scripts.map(scriptCard).join("")}</div>` : `<div class="empty">No scripts yet.</div>`}`;
+  $("#stnew", v).onsubmit = async e => {
+    e.preventDefault();
+    await api("/api/studio/scripts", {idea: e.target.idea.value});
+    toast("Writing... about a minute."); load();
+  };
+  $("#stvoicesave", v).onclick = () => api("/api/studio/profile", {voice: $("#stvoice", v).value}).then(() => toast("Voice saved"));
+  $("#staudsave", v).onclick = () => api("/api/studio/profile", {audience: $("#staud", v).value}).then(() => toast("Audience saved"));
+  $("#stvoicebuild", v).onclick = async e => {
+    const b = e.target; b.disabled = true; b.textContent = "Reading your clips...";
+    try { const j = await api("/api/studio/voice", {samples: $("#stsamples", v).value}); $("#stvoice", v).value = j.voice;
+      toast("Voice written and saved. Read it and fix anything that isn't you."); }
+    finally { b.disabled = false; b.textContent = "Build my voice from my clips"; }
+  };
+  v.querySelectorAll("[data-shot]").forEach(b => b.onclick = () => api(`/api/studio/scripts/${b.dataset.shot}/status`, {status: "shot"}).then(load));
+  v.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
+    const md = await (await fetch(`/api/studio/scripts/${b.dataset.copy}.md`)).text();
+    try { await navigator.clipboard.writeText(md); toast("Script copied"); } catch { toast("Couldn't copy; use Download instead", true); }
+  });
+  if (d.scripts.some(s => s.status === "writing")) studioTimer = setTimeout(() => current === "studio" && load(), 6000);
 }
 window.addEventListener("hashchange", () => { current = location.hash.slice(1) || "review"; load(); });
 load();

@@ -114,6 +114,8 @@ def create_app(cfg: Config) -> FastAPI:
         streams = [dict(r) for r in c.execute(
             "SELECT id, original_path, duration, status, error, processed_at FROM streams ORDER BY id DESC LIMIT 10")]
         return {
+            "brand": cfg.get("brand.name") or "",
+            "setup_done": bool(cfg.get("setup.done")),
             "dry_run": cfg.dry_run,
             "auto_post_threshold": cfg.get("review.auto_post_threshold"),
             "auto_reject_floor": cfg.get("review.auto_reject_floor"),
@@ -147,7 +149,8 @@ def create_app(cfg: Config) -> FastAPI:
             d["copy"] = {p: dict(zip(("title", "caption"), copy_for(d, p))) for p in platforms}
             if r["status"] == "review" and platforms:
                 d["suggested_time"] = db.iso(next_slot(c, cfg, platforms[0], db.utcnow()))
-            d["duration"] = round(d["end"] - d["start"], 1)
+            edited = (d.get("checks") or {}).get("edit") or {}
+            d["duration"] = round(edited.get("duration_out") or (d["end"] - d["start"]), 1)
             d["timeline"] = timeline(cfg, c, r["id"]) if d["posts"] else []
             out.append(d)
         return out
@@ -158,6 +161,14 @@ def create_app(cfg: Config) -> FastAPI:
         if not row or not row["file_path"] or not Path(row["file_path"]).exists():
             raise HTTPException(404)
         return FileResponse(row["file_path"], media_type="video/mp4")
+
+    @app.get("/media/clip/{clip_id}/srt")
+    def clip_srt(clip_id: int):
+        row = db.get_clip(conn(), clip_id)
+        srt = Path(row["file_path"]).with_suffix(".srt") if row and row["file_path"] else None
+        if not srt or not srt.exists():
+            raise HTTPException(404, "No caption file for this clip (re-render it to make one)")
+        return FileResponse(srt, media_type="application/x-subrip", filename=f"clip_{clip_id}.srt")
 
     @app.post("/api/clips/{clip_id}/approve")
     def approve(clip_id: int, body: dict = Body(default={})):
@@ -403,6 +414,30 @@ def create_app(cfg: Config) -> FastAPI:
         evaluate(c, cfg)
         return ab_summary(c)
 
+    @app.get("/api/setup")
+    def setup_get():
+        from ..onboarding import current
+        return current(cfg)
+
+    @app.post("/api/setup")
+    async def setup_post(name: str = Form(""), cta_text: str = Form(""), timezone: str = Form(""),
+                         upload_post_user: str = Form(""), inbox: str = Form(""), criteria: str = Form(""),
+                         topics: str = Form(""), wants: str = Form(""), logo: UploadFile | None = File(None)):
+        from ..onboarding import is_image, save
+        logo_bytes = None
+        if logo is not None and logo.filename:
+            logo_bytes = await logo.read()
+            if not is_image(logo_bytes):
+                raise HTTPException(400, "The logo must be a PNG file (a transparent background looks best)")
+        try:
+            result = save(cfg, {"name": name, "cta_text": cta_text, "timezone": timezone,
+                                "upload_post_user": upload_post_user, "inbox": inbox, "criteria": criteria,
+                                "topics": topics, "wants": wants}, logo_bytes)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        db.log_event(conn(), "setup_saved", None, {"name": name})
+        return {"ok": True, **result}
+
     @app.get("/api/settings")
     def get_settings():
         from ..maintenance import dashboard_url
@@ -418,6 +453,187 @@ def create_app(cfg: Config) -> FastAPI:
         c = conn()
         db.log_event(c, "settings_changed", None, changed)
         return {"ok": True, "changed": changed}
+
+    # ------------------------------------------------------------ niche research
+
+    @app.get("/api/research")
+    def research_get(min: float = 2.0, days: int = 90, own: int = 1):
+        from ..research import outliers, ytdlp_available
+        return {**outliers(conn(), min_multiple=min, days=days or None, include_own=bool(own)),
+                "ytdlp": ytdlp_available()}
+
+    @app.post("/api/research/add")
+    async def research_add(text: str = Form(""), creator: str = Form(""), platform: str = Form(""),
+                           file: UploadFile | None = File(None)):
+        from ..research import add_posts
+        if file is not None and file.filename:
+            text = (await file.read()).decode("utf-8-sig", errors="replace")
+        if not text.strip():
+            raise HTTPException(400, "Paste some posts or choose a file")
+        try:
+            return add_posts(conn(), text, source="file" if file is not None and file.filename else "paste",
+                             creator=creator, platform=platform)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/research/fetch")
+    def research_fetch(body: dict = Body(...)):
+        from ..research import fetch_channel
+        handle = str(body.get("channel") or "").strip()
+        if not handle:
+            raise HTTPException(400, "Enter a YouTube @handle or channel link")
+        try:
+            return fetch_channel(conn(), handle, int(body.get("limit") or 40))
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/research/breakdown")
+    def research_breakdown(body: dict = Body(default={})):
+        from ..research import breakdown
+        try:
+            return breakdown(cfg, conn(), _claude(), min_multiple=float(body.get("min") or 2.0))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.get("/api/research/breakdown")
+    def research_breakdown_last():
+        from ..research import last_breakdown
+        return last_breakdown(cfg) or {}
+
+    @app.post("/api/research/remove")
+    def research_remove(body: dict = Body(...)):
+        from ..research import remove
+        n = remove(conn(), creator=body.get("creator"), post_id=body.get("id"))
+        return {"ok": True, "removed": n}
+
+    # ------------------------------------------------------------ script studio
+
+    @app.get("/api/studio")
+    def studio_get():
+        from ..studio import list_scripts, profile_wpm, read_profile
+        from ..config import secret
+        c = conn()
+        prof = read_profile(cfg)
+        return {"profile": prof, "wpm": profile_wpm(cfg, c, prof["voice"]), "scripts": list_scripts(c),
+                "claude": bool(secret("ANTHROPIC_API_KEY"))}
+
+    @app.post("/api/studio/profile")
+    def studio_profile(body: dict = Body(...)):
+        from ..studio import save_profile
+        save_profile(cfg, voice=body.get("voice"), audience=body.get("audience"))
+        db.log_event(conn(), "profile_saved", None, [k for k in ("voice", "audience") if body.get(k) is not None])
+        return {"ok": True}
+
+    def _claude():
+        from ..llm import ClaudeJSON, LLMError
+        try:
+            return ClaudeJSON(cfg)
+        except LLMError as exc:
+            raise HTTPException(400, f"{exc}. The Script studio needs Claude.")
+
+    @app.post("/api/studio/voice")
+    def studio_voice(body: dict = Body(default={})):
+        from ..studio import build_voice
+        try:
+            return {"voice": build_voice(cfg, conn(), _claude(), body.get("samples") or "")}
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/studio/scripts")
+    def studio_new(body: dict = Body(...)):
+        from ..research import get_post, outliers
+        from ..studio import start_script
+        based_on = None
+        if body.get("research_id"):
+            c = conn()
+            post = get_post(c, int(body["research_id"]))
+            if not post:
+                raise HTTPException(404, "That research post is gone")
+            ranked = {r["id"]: r for r in outliers(c, min_multiple=0, days=None, include_own=False)["outliers"]}
+            based_on = ranked.get(post["id"]) or {"creator": post["creator"], "views": post["views"],
+                                                  "hook": post["hook"] or post["title"], "multiple": None,
+                                                  "formula": None}
+            from ..research import last_breakdown
+            bd = last_breakdown(cfg) or {}
+            mine = next((w for w in bd.get("winners", []) if w.get("id") == post["id"]), None)
+            if mine:
+                based_on = {**based_on, "breakdown": {k: mine[k] for k in ("format", "structure", "cta", "pace")},
+                            "shared": bd.get("shared")}
+        llm = _claude()
+        try:
+            sid = start_script(cfg, conn(), body.get("idea") or "", based_on, llm=llm)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "id": sid}
+
+    @app.post("/api/studio/scripts/{script_id}/status")
+    def studio_status(script_id: int, body: dict = Body(...)):
+        if body.get("status") not in ("ready", "shot"):
+            raise HTTPException(400, "status must be ready or shot")
+        db.update_script(conn(), script_id, status=body["status"])
+        return {"ok": True}
+
+    @app.get("/api/studio/scripts/{script_id}.md")
+    def studio_markdown(script_id: int):
+        from fastapi.responses import PlainTextResponse
+        row = conn().execute("SELECT script_json FROM scripts WHERE id=?", (script_id,)).fetchone()
+        if not row or not row["script_json"]:
+            raise HTTPException(404)
+        return PlainTextResponse(json.loads(row["script_json"])["markdown"], media_type="text/markdown",
+                                 headers={"Content-Disposition": f'attachment; filename="script_{script_id}.md"'})
+
+    # ------------------------------------------------------------ edit a video
+
+    @app.get("/api/edits")
+    def edits_get():
+        from ..config import secret
+        from ..editor import list_edits
+        try:
+            import faster_whisper  # noqa: F401
+            local_stt = True
+        except ImportError:
+            local_stt = False
+        return {"edits": list_edits(conn()), "claude": bool(secret("ANTHROPIC_API_KEY")),
+                "transcription": local_stt or cfg.get("transcription.backend") == "openai"}
+
+    @app.post("/api/edits")
+    def edits_new(files: list[UploadFile] = File(...), sound: UploadFile | None = File(None),
+                  options: str = Form("{}")):
+        from ..editor import create, kick, safe_name
+        tmp = cfg.subdir("edits") / "incoming"
+        tmp.mkdir(parents=True, exist_ok=True)
+        saved, sound_path = [], None
+        try:
+            for up in files:
+                if not up.filename:
+                    continue
+                dest = tmp / safe_name(up.filename)
+                with open(dest, "wb") as fh:
+                    shutil.copyfileobj(up.file, fh, 8 * 1024 * 1024)
+                saved.append(dest)
+            if sound is not None and sound.filename:
+                sound_path = tmp / ("sound_" + safe_name(sound.filename))
+                with open(sound_path, "wb") as fh:
+                    shutil.copyfileobj(sound.file, fh, 8 * 1024 * 1024)
+            try:
+                edit_id = create(cfg, conn(), saved, json.loads(options or "{}"), sound_path)
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise HTTPException(400, str(exc))
+        finally:
+            for f in saved + ([sound_path] if sound_path else []):
+                f.unlink(missing_ok=True)   # moved into the edit's folder on success
+        kick(cfg)
+        return {"ok": True, "id": edit_id}
+
+    @app.post("/api/edits/{edit_id}/retry")
+    def edits_retry(edit_id: int):
+        from ..editor import kick, retry
+        try:
+            retry(conn(), edit_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        kick(cfg)
+        return {"ok": True}
 
     @app.get("/api/events")
     def events(limit: int = 100):

@@ -1,0 +1,77 @@
+# Checks every change on Linux and on a real Windows machine (the installer included), and builds
+# the download your friends use: Actions -> Build -> Run workflow, enter a version like 1.0.0.
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [claude/kir-auto-clipper, main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for the download (e.g. 1.0.0). Leave blank to only run the checks."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  windows-install:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: FFmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Run the installer exactly as a friend would (no questions)
+        shell: pwsh
+        run: |
+          py -0p
+          $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + $env:Path
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Tests on Windows
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + $env:Path
+          .venv\Scripts\python -m pip install pytest --quiet
+          .venv\Scripts\python -m pytest -q
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+    needs: [test-linux, windows-install]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package
+        run: |
+          v="${{ github.event.inputs.version }}"
+          git archive --format=zip --prefix="Auto-Clipper/" -o "Auto-Clipper-${v}.zip" HEAD
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: Auto-Clipper ${{ github.event.inputs.version }}
+          target_commitish: ${{ github.sha }}
+          files: Auto-Clipper-${{ github.event.inputs.version }}.zip
+          body: |
+            Download **Auto-Clipper-${{ github.event.inputs.version }}.zip** below (Windows 10/11).
+            Unzip it, open the folder, double-click **Install.bat**, then follow SETUP-FOR-A-FRIEND.md.
+            Updating: unzip the new version over your old folder (your settings and keys are kept), then run Install.bat again.

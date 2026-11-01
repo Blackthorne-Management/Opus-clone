@@ -14,11 +14,23 @@ When OBS finishes a recording in the watched folder, the clipper:
 
 It runs on your Windows PC in the background. The review dashboard is at **http://127.0.0.1:8765**.
 
+It also edits any video you drop in, finds what's working in your niche, and writes scripts in your voice.
+Those parts came from the master-skills repo; **[MASTER-SKILLS.md](MASTER-SKILLS.md)** lists what was kept,
+what was adapted, and what was left out.
+
+**Setting it up for someone else?** Send them **[SETUP-FOR-A-FRIEND.md](SETUP-FOR-A-FRIEND.md)**. They
+download the zip from the Releases page, double-click `Install.bat`, and fill in **Settings → Make it yours**.
+Their name, keys and preferences stay on their PC.
+
 ---
 
 ## 1. Setup (once)
 
-You need **Python 3.11+**, **ffmpeg**, and **git** on Windows.
+**Easiest:** double-click **`Install.bat`** in the app folder. It installs Python and FFmpeg with winget if
+they're missing, installs the app, asks for your Claude key, and can start it at login. Then fill in
+**Settings → Make it yours** in the dashboard. Run it again after every update.
+
+By hand (needs **Python 3.11+**, **ffmpeg**, and **git** on Windows):
 
 ```powershell
 winget install Python.Python.3.12
@@ -131,7 +143,8 @@ Finish the stream. That's it. Roughly:
 1. Stream as normal. When the "Stream processed" notification arrives, open the dashboard.
 2. Look at **Stats → Score distribution** and **Would auto-post**. Ask: is the number of 90+ clips per
    stream sensible (say 1-4)? Are those genuinely your best moments? Watch a few in *Needs review*.
-3. If almost nothing reaches 90, or almost everything does, either edit `virality_criteria.md` (the
+3. If almost nothing reaches 90, or almost everything does, either edit the clip criteria in **Settings → Make it
+   yours** (saved as `my-criteria.md`; before setup it's `virality_criteria.md`) (the
    plain-English brief Claude scores against) or change `review.auto_post_threshold`.
    You can re-score a stream for cheap: the transcript is cached, so only the Claude step re-runs.
 4. When you're happy, set `review.dry_run: false` and restart the task (or reboot).
@@ -343,6 +356,72 @@ recent winners and losers when writing hooks for new clips.
 
 ---
 
+## 5f. Editing, research and scripts (merged in from the master-skills repo)
+
+These come from Jake Schincariol's free [master-skills](https://github.com/Jakeschincariol/master-skills)
+pack (MIT): the `/edit` and `/virality` skills, rebuilt as parts of this app. Where the skill did something
+better than the clipper did, the skill's way replaced it.
+
+### Tighter clips (on by default)
+
+- **Jump cuts inside every clip.** Dead air, "um"/"uh", and retakes (a line said twice in a row: the last take
+  wins) are cut, each with a breath kept on both sides so no word is clipped. Joins get a 30 ms crossfade, and
+  every cut lands on a whole video frame, so sound and picture stay in sync. If the clip has music or game audio
+  under your voice, pauses are found from the transcript instead. A safety cap stops it gutting a clip:
+  `jumpcut.max_cut_ratio` (40%). Change the pace per clip under **Re-render** (tight / normal / loose / off),
+  or for everything under `jumpcut:` in `config.yaml`. Whisper doesn't always write down "um", so not every
+  one is caught. The card shows what was cut ("Tightened 52s → 44s: 9 pauses, 2 ums").
+- **Audio mastered, not auto-levelled.** *Replaced:* clips used to go through single-pass `loudnorm`, which
+  rides the volume like an automatic gain control (it lifts room echo between words). Now each clip is
+  measured, raised or lowered by one fixed amount to **-14 LUFS**, and only the peaks are caught by a limiter
+  at -1.5 dBTP. If that would squash the peaks by more than 6 dB, it masters to -16 LUFS instead and the card
+  says so. Long-form videos already used measured two-pass levelling and are unchanged.
+- **Stop motion** as a look on any clip: Re-render → Stop motion (classic wobble, clay, poster, pixel; 8, 10 or
+  12 drawings per second). Captions, the hook and your logo stay smooth on top.
+
+### Hook check and AI-tell cleanup (every clip, free, no API calls)
+
+- Every on-screen hook (A and B) is scored 0-100 on five checks, named against a library of 26 hook formulas,
+  and checked for **Jake's payoff rule**: does it lead with money, time or a number in the first 8 words? It
+  shows on each clip card. It is good at catching weak hooks (greetings, preambles, nothing concrete) and is
+  **not** a view predictor; Claude's 0-99 score still decides auto-posting.
+- Every title, caption, on-screen hook and per-platform caption Claude writes is cleaned: em dashes, invisible
+  characters and stock phrases ("game changer", "let's dive in", "journey") are fixed automatically, and
+  structural tells ("it's not just X, it's Y", "The result?") are flagged on the card for you to rewrite.
+  Claude is also told up front not to write them. Your own spoken words and your hashtags are never touched.
+
+### Edit a video (new tab)
+
+Drop in **any** video (a phone take, a reel you recorded) and get a postable 9:16 edit: jump cuts, captions word
+by word, the hook on screen, face-following framing, mastered audio, and optional stop motion. Claude can write
+the hook, title, captions and hashtags, or you write them. Or drop in **photos** to make a stop-motion video (one
+photo per drawing, optional sound or voice-over). The result waits in **Needs review** with the same Re-render
+controls, then follows the same five-step posting plan once you approve it. Uploads never post on their own.
+Command line: `kir edit take.mp4` (or `kir edit *.jpg --look clay`).
+
+### Niche research (new tab)
+
+Find what's already working. Paste posts (`creator | views | hook | url`), upload an analytics CSV, or fetch a
+public YouTube channel's Shorts (needs `yt-dlp`: `.venv\Scripts\python -m pip install yt-dlp`). Every post is
+ranked by its views **as a multiple of that creator's own median**, so a small account's breakout beats a big
+account's normal day; creators need 4+ posts. Your own posted clips with results are included automatically.
+The tab names the hook formula behind each outlier and says how much evidence you have (12 posts is an
+anecdote; 30+ across 6+ creators is evidence). **Write my version** sends a winner to the Script studio.
+Nothing logs in, uses cookies, or scrapes behind a login.
+
+### Script studio (new tab, uses Claude)
+
+Shoot-ready scripts for **new** videos, in your voice. Five hooks on five formulas; the best one that is
+shootable (no blanks left) and leads with a payoff opens the script. Then timed beats (SAY / SCREEN / VISUAL),
+one comment-a-keyword CTA, caption, hashtags, cover and title, plus a LinkedIn version. Everything is timed at
+**your** pace (measured from your clips), cleaned of AI tells (one automatic rewrite if any are left), and never
+invents a number: unknowns stay as `{{your number}}` for you to fill in. Fill in **Your voice** once: **Build my
+voice from my clips** reads your best clips' transcripts and writes `brand\my-voice.md` with your real lines; add
+the numbers you'll say on camera under "Proof I can say out loud". `brand\my-audience.md` describes your one viewer
+and offer. Download or copy each script as Markdown. Each script costs one or two Claude calls.
+
+---
+
 ## 6. Tuning with real results
 
 Upload-Post's analytics access varies by plan, so performance import is a CSV for now:
@@ -360,7 +439,7 @@ kir perf-report
 ```
 
 The report shows median views per score band and how well the score predicts views. If the
-correlation is near zero, the score isn't predicting performance yet: adjust `virality_criteria.md`.
+correlation is near zero, the score isn't predicting performance yet: adjust the clip criteria (Settings → Make it yours).
 If higher bands clearly do better, move `auto_post_threshold` to where the drop-off is.
 
 The score measures structural quality (hook, payoff, length, topic). It can't see channel momentum or
@@ -386,6 +465,9 @@ All from the repo folder (`.venv\Scripts\kir ...`, or `python -m kir_clipper ...
 | `kir longform list \| whole <stream> \| build <id>` | Long-form YouTube edits |
 | `kir import <file> --posted "YYYY-MM-DD HH:MM" [--done feed,trial]` | Add a reel you already posted to the schedule |
 | `kir thumbnails --title "..."` | Preview the thumbnail style for a title |
+| `kir edit <video or photos> [--pace tight] [--look clay]` | Edit a raw take (or make stop motion); it waits in Needs review |
+| `kir research add <file> \| fetch <@handle> \| report` | Niche research from the command line |
+| `kir script "the idea"` | Write a shoot-ready script and print it |
 
 ---
 
@@ -399,7 +481,9 @@ Streams\failed\         <- recordings that errored (see the alert / dashboard)
 Streams\kir-data\
     kir_clipper.db      <- SQLite: streams, clips, posts, performance, activity log
     transcripts\        <- cached transcripts (re-runs are free)
-    clips\stream_0001\  <- rendered clips + a .recipe.json describing each edit
+    clips\stream_0001\  <- rendered clips + a .recipe.json describing each edit and .edit.json (cuts, audio)
+    clips\upload_0001\  <- videos from the Edit a video tab
+    edits\edit_0001\    <- the uploads themselves (kept, so re-renders and re-edits work)
     longform\stream_0001\ <- full-length YouTube edits
     logs\kir_clipper.log
     notifications.log   <- every summary and alert, even without a webhook
@@ -409,6 +493,9 @@ Streams\kir-data\
 
 ## 9. Costs
 
+- **Script studio / voice builder / Edit a video copy**: one Claude call each (a script may take a second
+  call to rewrite lines that still read as machine-written). Hook checks, AI-tell cleanup, jump cuts, audio
+  mastering, stop motion and niche research are local and free.
 - **Claude** (`claude-opus-5-5` at medium effort by default): an estimate, not yet measured on a real
   stream, is about $1-2 per stream regardless of length up to the clip cap (most of the spend is the
   second-pass review of each finalist), so roughly $10-20/month at 8-9 streams. This is higher than the
@@ -444,7 +531,15 @@ kir_clipper/
   transcribe.py   chunked faster-whisper / Whisper API, seam-safe stitching, loudness track
   highlights.py   pass 1 candidates → dedupe → pass 2 boundary/copy refinement → snap → cap
   llm.py          Claude structured-output calls (with server-side refusal fallback)
-  render.py       ffmpeg reframe (face/center/blur-pad), zoom, watermark; recipes
+  render.py       ffmpeg jump cuts, reframe (face/center/blur-pad), zoom, stop motion, watermark; recipes
+  jumpcut.py      dead air / filler / retake cuts on the frame grid (from master-skills /edit)
+  audio.py        fixed-gain -14 LUFS mastering + true-peak limiter (from master-skills /edit)
+  stopmotion.py   stop-motion looks for video and photos (from master-skills /edit)
+  editor.py       "Edit a video": uploads -> review clips
+  research.py     niche research: outliers vs each creator's median (from master-skills /virality)
+  studio.py       script studio: voice profile, scripts, hook pick, timing (from master-skills /virality)
+  virality/       hook scorer + 26-formula library, AI-tell cleaner, detector, collector, speech timing
+                  (copied from master-skills /virality, MIT, origin headers kept; humanize bugs fixed)
   captions.py     ASS word-by-word caption styles (hormozi [default], bold_pop, karaoke, boxed, minimal)
   scheduler.py    slot planning, caps, spacing, submit/poll/retry/alert
   publishers/     Publisher interface, Upload-Post adapter, dry-run adapter

@@ -20,7 +20,8 @@ from .captions import CAPTION_STYLES
 from .config import Config
 from .highlights import PLATFORMS, REFINE_SCHEMA, clip_words
 from .pipeline import gate
-from .render import CROP_MODES, ZOOM_MODES, default_recipe, render_clip
+from .render import CROP_MODES, ZOOM_MODES, default_recipe, edit_summary, render_clip
+from .virality import WRITING_RULES, polish
 
 log = logging.getLogger("kir.reedit")
 
@@ -146,7 +147,9 @@ Write new copy. Keep start_idx=0 and end_idx=0 (boundaries are not changing) and
 for the clip itself. hook_overlay is at most 7 words of on-screen text for the first 2 seconds; take a
 different angle from the earlier ones (a question instead of a statement, a number, a bold claim, etc.).
 Per-platform copy follows the usual rules: TikTok short + hashtags, YouTube searchable title under 90
-characters + #shorts, Instagram 2-4 sentences ending in a question, Facebook conversational, X under 240 chars."""
+characters + #shorts, Instagram 2-4 sentences ending in a question, Facebook conversational, X under 240 chars.
+
+{WRITING_RULES}"""
     return llm(system, user, REFINE_SCHEMA)
 
 
@@ -196,6 +199,7 @@ def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
                      for c in lineage]
     from .hooktests import winning_hook
     copy = rewrite_copy(llm, cfg, text, previous_copy, winning_hook(conn, root["id"]))
+    checks = polish(copy)
     base = default_recipe(cfg, root)
     recipe = vary_recipe(previous_recipes, base, rng)
     recipe["hook_text"] = copy.get("hook_overlay") or copy.get("hook") or ""
@@ -209,12 +213,13 @@ def reedit_one(cfg: Config, conn, cand: dict, llm, rng=None) -> int:
         "hook": copy.get("hook") or root["hook"], "reason": f"90-day re-edit of clip {root['id']}",
         "title": copy.get("title"), "caption": copy.get("caption"), "hashtags": copy.get("hashtags"),
         "platform_captions": {p: copy[p] for p in PLATFORMS if p in copy},
+        "checks": checks,
     }
     clip_id = db.insert_clip(conn, root["stream_id"], clip, "pending", recipe, parent_clip_id=root["id"], version=version)
     out = cfg.subdir("clips") / f"stream_{root['stream_id']:04d}" / f"clip_{root['id']:05d}_v{version}.mp4"
     render_clip(cfg, source, clip, words, recipe, out)
     status = _repost_status(cfg, root, clip["score"])
-    db.update_clip(conn, clip_id, status=status, file_path=str(out))
+    db.update_clip(conn, clip_id, status=status, file_path=str(out), checks={**checks, "edit": edit_summary(out)})
     db.log_event(conn, "clip_reedited", clip_id, {"root": root["id"], "version": version, "recipe": recipe})
     log.info("Re-edit v%d of clip %s -> clip %s (%s, %s captions, %s crop, %s zoom)", version, root["id"], clip_id,
              status, recipe["caption_style"], recipe["crop_mode"], recipe["zoom"])

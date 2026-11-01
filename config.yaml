@@ -63,6 +63,23 @@ render:
     hook_overlay: true
     outro_cta: true
 
+# Tight jump cuts inside every short clip (from the /edit skill): dead air, "um"/"uh", and retakes
+# (a line said twice in a row: the last take wins). Each cut keeps a breath so words are never clipped.
+jumpcut:
+  enabled: true
+  pace: tight               # tight (shorts) | normal | loose (talks); per clip in the dashboard's Re-render
+  fillers: true             # cut "um", "uh"... when the transcript has them (Whisper drops some)
+  retakes: fuzzy            # off | exact | fuzzy
+  max_cut_ratio: 0.4        # never remove more than this share of a clip; eases off instead
+  crossfade_ms: 30          # audio crossfade at each join (no clicks)
+
+# Clip audio: one fixed gain to the target loudness, then a true-peak limiter (no compression on the voice).
+audio:
+  target_lufs: -14
+  true_peak: -1.5
+  max_limiting_db: 6        # if hitting -14 would squash peaks more than this, master to fallback_lufs instead
+  fallback_lufs: -16
+
 brand:
   name: Keepingit_Rael
   font: Montserrat Black             # bundled in brand/fonts (OFL); any font there or installed works

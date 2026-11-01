@@ -12,3 +12,11 @@ logs/
 config.local.yaml
 *.db
 *.sqlite3
+# Personal files: each creator's own copy, never committed
+my-criteria.md
+brand/my-*.md
+brand/logo.png
+brand/thumbnail/person/*.png
+brand/thumbnail/person/*.jpg
+brand/intro.mp4
+brand/outro.mp4
