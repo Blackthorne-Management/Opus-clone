@@ -42,6 +42,7 @@ jobs:
       - name: Run the installer exactly as a friend would (no questions)
         shell: pwsh
         run: |
+          py -0p
           $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + $env:Path
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

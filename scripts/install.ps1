@@ -34,21 +34,52 @@ function Ensure($cmd, $wingetId, $label) {
     return $true
 }
 
+# Python versions every package the app needs has been checked on, best first. "py -3" alone would pick the
+# newest Python on the PC, which can be one the transcription libraries don't support yet.
+$Supported = @("3.12", "3.13", "3.11")
+
+function Find-Python {
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { return $null }
+    foreach ($v in $Supported) {
+        cmd /c "py -$v -c ""import sys"" >nul 2>&1"
+        if ($LASTEXITCODE -eq 0) { return $v }
+    }
+    return $null
+}
+
 Write-Host "== Auto-Clipper setup ==" -ForegroundColor Cyan
-$ok = Ensure "py" "Python.Python.3.12" "Python 3.12"
-$ok = (Ensure "ffmpeg" "Gyan.FFmpeg" "FFmpeg (video tools)") -and $ok
+$ok = Ensure "ffmpeg" "Gyan.FFmpeg" "FFmpeg (video tools)"
+$PyVer = Find-Python
+if (-not $PyVer) {
+    if ((Get-Command winget -ErrorAction SilentlyContinue) -and (Ask "Python 3.12 (needed by the app) is not installed. Install it now with winget?")) {
+        winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent
+        Refresh-Path
+        $PyVer = Find-Python
+    }
+    if (-not $PyVer) {
+        Write-Host "Python 3.12 is needed (from python.org, tick 'Add to PATH'). If you just installed it, close this window and run Install.bat again." -ForegroundColor Yellow
+        $ok = $false
+    }
+}
 if (-not $ok) { if (-not $Quiet) { Read-Host "Press Enter to close" }; exit 1 }
 
-if (-not (Test-Path ".venv")) {
-    Write-Host "Creating the app's private Python environment..."
-    py -3 -m venv .venv
-}
 $Py = Join-Path $Repo ".venv\Scripts\python.exe"
+if (Test-Path $Py) {
+    $venvVer = (& $Py -c "import sys; print('%d.%d' % sys.version_info[:2])") 2>$null
+    if ($Supported -notcontains "$venvVer") {
+        Write-Host "Rebuilding the app's Python environment (it was made with Python $venvVer)..."
+        Remove-Item -Recurse -Force ".venv"
+    }
+}
+if (-not (Test-Path $Py)) {
+    Write-Host "Creating the app's private Python environment (Python $PyVer)..."
+    py -$PyVer -m venv .venv
+}
 Write-Host "Installing the app (the first time takes a few minutes)..."
 & $Py -m pip install --upgrade pip --quiet
 # whisper = local transcription, faces = speaker-aware reframing, research = public Shorts for Niche research
-& $Py -m pip install -e ".[whisper,faces,research]" --quiet
-if ($LASTEXITCODE -ne 0) { throw "Installing the app failed. Check your internet connection and run this again." }
+& $Py -m pip install -e ".[whisper,faces,research]" --progress-bar off
+if ($LASTEXITCODE -ne 0) { throw "Installing the app failed (the reason is in the lines above). Check your internet connection and run Install.bat again." }
 
 # GPU transcription needs NVIDIA's cuBLAS/cuDNN runtime. Installing via pip is the simplest route.
 if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
