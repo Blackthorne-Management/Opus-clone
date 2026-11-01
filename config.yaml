@@ -57,6 +57,7 @@ render:
   audio_bitrate: 192k
   default_recipe:
     caption_style: hormozi     # hormozi | bold_pop | karaoke | boxed | minimal
+    caption_lead: 0.04         # seconds captions appear before the word; raise if they feel late, lower (or negative) if early
     crop_mode: face          # face | center | blur_pad
     zoom: punch              # none | punch | slow_push
     hook_overlay: true

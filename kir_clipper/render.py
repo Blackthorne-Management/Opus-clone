@@ -30,6 +30,7 @@ def default_recipe(cfg: Config, clip: dict) -> dict:
         "version": 1,
         "caption_style": d.get("caption_style", "hormozi"),
         "caption_position": d.get("caption_position", "lower"),
+        "caption_lead": float(d.get("caption_lead", 0.04)),
         "crop_mode": d.get("crop_mode", "face"),
         "zoom": d.get("zoom", "punch"),
         "zoom_period": float(d.get("zoom_period", 6.0)),

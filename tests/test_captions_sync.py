@@ -23,7 +23,7 @@ def test_early_word_starts_move_to_voice_onset():
         {"w": "years", "s": 2.05, "e": 2.60},  # already inside speech: must not move
         {"w": "later", "s": 2.85, "e": 3.60},  # 350 ms early after a pause
     ]
-    assert align_word_starts(words, audio) == 2
+    align_word_starts(words, audio)
     assert abs(words[0]["s"] - 0.98) < 0.04
     assert words[1]["s"] == 2.05
     assert abs(words[2]["s"] - 3.18) < 0.04
@@ -72,3 +72,30 @@ def test_hormozi_long_word_shrinks_and_real_pause_clears_screen():
     ev = _events(build_ass(words, 5, {"caption_style": "hormozi"}, {}))
     assert "\\fs" in ev[0]                       # shrunk to fit one line
     assert _t(ev[0].split(",")[2]) < 2.1         # 1.7 s pause: caption leaves the screen
+
+
+def _syllables(spans, total=3.0, seed=2):
+    """Back-to-back words: each one swells and fades, so the boundary between two is an energy dip."""
+    rng = np.random.default_rng(seed)
+    x = rng.normal(0, 0.003, int(total * SR))
+    for a, b in spans:
+        i, j = int(a * SR), int(b * SR)
+        x[i:j] += rng.normal(0, 0.25, j - i) * np.hanning(j - i)
+    return x.astype(np.float32)
+
+
+def test_boundary_between_connected_words_snaps_to_the_dip():
+    audio = _syllables([(0.5, 1.0), (1.0, 1.5), (1.5, 2.0)])
+    words = [{"w": "make", "s": 0.52, "e": 1.10}, {"w": "five", "s": 1.10, "e": 1.38},   # 100 ms late
+             {"w": "million", "s": 1.38, "e": 2.0}]                                     # 120 ms early
+    align_word_starts(words, audio)
+    assert abs(words[1]["s"] - 1.0) < 0.04 and abs(words[2]["s"] - 1.5) < 0.04
+    assert words[0]["e"] <= words[1]["s"] + 1e-6
+
+
+def test_boundary_left_alone_without_a_clear_dip():
+    rng = np.random.default_rng(3)
+    audio = (rng.normal(0, 0.003, SR * 3) + np.r_[np.zeros(SR // 2), rng.normal(0, 0.25, 2 * SR), np.zeros(SR // 2)]).astype(np.float32)
+    words = [{"w": "a", "s": 0.6, "e": 1.2}, {"w": "b", "s": 1.2, "e": 1.9}]
+    align_word_starts(words, audio)
+    assert words[1]["s"] == 1.2

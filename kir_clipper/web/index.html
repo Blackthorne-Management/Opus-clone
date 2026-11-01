@@ -194,6 +194,14 @@ function renderTabs() {
   const m = $("#mode"); m.className = "pill " + (summary.dry_run ? "dry" : "live");
   m.textContent = summary.dry_run ? "DRY RUN: nothing posts" : "LIVE: auto-posting " + summary.auto_post_threshold + "+";
 }
+const LEADS = [[0.30, "0.3s earlier"], [0.20, "0.2s earlier"], [0.12, "0.1s earlier"], [0.04, "On time (default)"],
+  [-0.04, "0.1s later"], [-0.14, "0.2s later"], [-0.24, "0.3s later"]];
+function leadSel(v) {
+  const cur = v === undefined || v === null || v === "" ? 0.04 : Number(v);
+  const best = LEADS.reduce((a, b) => Math.abs(b[0] - cur) < Math.abs(a[0] - cur) ? b : a);
+  return `<select data-r="caption_lead" title="Shift every caption in this clip. Earlier if words show up after you say them; later if they show up before.">${
+    LEADS.map(([n, l]) => `<option value="${n}" ${n === best[0] ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+}
 function clipCard(c) {
   const styles = ["hormozi","bold_pop","karaoke","boxed","minimal"], crops = ["face","center","blur_pad"], zooms = ["none","punch","slow_push"];
   const r = c.recipe || {};
@@ -218,6 +226,7 @@ function clipCard(c) {
          <label>${p} caption<textarea data-p="${p}" data-k="caption">${esc(v.caption)}</textarea></label>`).join("")}</details>
       ${r.imported ? "" : `<details><summary>Re-render (style, crop, zoom, timing)</summary>
         <div class="row">${sel("caption_style", styles, r.caption_style)}${sel("crop_mode", crops, r.crop_mode)}${sel("zoom", zooms, r.zoom)}</div>
+        <div class="row"><label>Caption timing ${leadSel(r.caption_lead)}</label></div>
         <div class="row"><label>Start (s)<input data-b="start" value="${c.start}"></label><label>End (s)<input data-b="end" value="${c.end}"></label>
           <label>Hook overlay<input data-r="hook_text" value="${esc(r.hook_text)}"></label></div>
         <button class="btn plain" data-a="render">Re-render</button>
