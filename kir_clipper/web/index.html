@@ -223,9 +223,12 @@ function copyReport(r) {
 }
 function editLine(e) {
   if (!e) return "";
+  const cards = (e.proof_cards || []);
+  const cardLine = cards.length ? `<div class="muted">Proof images: ${cards.filter(x => x.placed).length} of ${cards.length} placed${
+    cards.some(x => !x.placed) ? ` (not found in what you said: ${cards.filter(x => !x.placed).map(x => `"${esc(x.text.slice(0, 40))}..."`).join(", ")})` : ""}</div>` : "";
   const names = {silence: "pause", filler: "um", retake: "retake"};
   const cuts = Object.entries(e.cuts || {}).map(([k, n]) => `${n} ${names[k] || k}${n > 1 ? "s" : ""}`).join(", ");
-  return `<div class="muted">${e.removed ? `Tightened ${e.duration_in}s → ${e.duration_out}s (${cuts})` : "No jump cuts"}${
+  return cardLine + `<div class="muted">${e.removed ? `Tightened ${e.duration_in}s → ${e.duration_out}s (${cuts})` : "No jump cuts"}${
     e.lufs != null ? ` · audio ${e.lufs} LUFS` : ""}${e.audio_note ? ` <span title="${esc(e.audio_note)}">ⓘ</span>` : ""}</div>`;
 }
 // Every jump cut on this clip; untick one to keep that moment in on the next re-render.
@@ -251,6 +254,7 @@ function clipCard(c) {
     <div class="body">
       <div class="row" style="align-items:baseline">${r.photos ? `<span class="pill" style="background:var(--line);color:var(--ink)">Stop motion from photos</span>`
         : r.imported ? `<span class="pill" style="background:var(--line);color:var(--ink)">Imported reel</span>`
+        : r.sales ? `<span class="pill" style="background:var(--line);color:var(--ink)">Sales video${r.aspect === "16:9" ? " · 16:9" : ""}</span>`
         : r.upload && !c.score ? `<span class="pill" style="background:var(--line);color:var(--ink)">Your upload</span>`
         : `<span class="score ${scoreClass(c.score)}">${c.score}</span>${r.upload ? ` <span class="pill" style="background:var(--line);color:var(--ink)">Your upload</span>` : ""}`}
         <span class="muted">clip ${c.id}${c.version>1?` · re-edit v${c.version} of ${c.parent_clip_id}`:""} · ${c.duration}s · ${c.status}${c.note?` · ${esc(c.note)}`:""}</span></div>
@@ -279,7 +283,8 @@ function clipCard(c) {
         <button class="btn plain" data-a="render">Re-render</button>
       </details>`}
       <div class="row">
-        ${canAct ? `<button class="btn approve" data-a="approve">Approve &amp; schedule</button>` : ""}
+        ${r.sales ? `<a class="btn approve" href="/media/clip/${c.id}?download=1" download>Download video</a>`
+          : canAct ? `<button class="btn approve" data-a="approve">Approve &amp; schedule</button>` : ""}
         <button class="btn plain" data-a="save">Save copy</button>
         ${c.file_path && !r.imported ? `<a class="btn plain" href="/media/clip/${c.id}/srt" download title="Caption file (.srt) for YouTube or anywhere that takes one">Captions .srt</a>` : ""}
         ${c.status !== "rejected" && !["posted","scheduled"].includes(c.status) ? `<button class="btn reject" data-a="reject">Reject</button>` : ""}
@@ -711,11 +716,13 @@ function renderImport(v) {
   };
 }
 // ---------------------------------------------------------------- edit a video
+const tabFor = status => TABS.find(([k]) => k.split(",").includes(status)) || ["review", "Needs review"];
 let editTimer = null;
 const STYLES = ["hormozi","bold_pop","karaoke","boxed","minimal"];
 async function renderEdit(v) {
   clearTimeout(editTimer);
-  const d = await api("/api/edits");
+  const [d, st] = await Promise.all([api("/api/edits"), api("/api/studio")]);
+  const salesScripts = st.scripts.filter(s => s.kind === "sales" && s.status !== "writing" && s.status !== "failed");
   const opt = (name, opts, sel, labels) => `<select name="${name}">${opts.map((o, i) => `<option value="${o}" ${o===sel?"selected":""}>${labels ? labels[i] : (o || "default")}</option>`).join("")}</select>`;
   v.innerHTML = `<div class="card" style="display:block;max-width:820px">
     <h3 style="margin-top:0">Edit a video</h3>
@@ -726,12 +733,16 @@ async function renderEdit(v) {
     <form id="edform">
       <label>Video, or photos for stop motion<input type="file" name="files" accept="video/*,image/*" multiple required></label>
       <div id="edvideo">
+        <div class="row"><label>What is it?<select name="sales_script"><option value="">A short video for social</option>${salesScripts.map(s =>
+            `<option value="${s.id}">Sales video: ${esc(s.script.title)}</option>`).join("")}</select></label>
+          <label>Shape${opt("aspect", ["9:16", "16:9"], "9:16", ["9:16 (phone, social)", "16:9 (website, YouTube)"])}</label></div>
+        <div id="edproof"></div>
         <div class="row"><label>Jump cuts${opt("pace", ["tight","normal","loose","off"], "tight", ["Tight (shorts)","Normal","Loose (talks)","Off"])}</label>
           <label>Caption style${opt("caption_style", ["", ...STYLES], "")}</label>
           <label>Framing${opt("crop_mode", ["", "face", "center", "blur_pad"], "", ["default", "follow my face", "center", "fit with blurred background"])}</label></div>
-        <div class="row"><label>Stop-motion look (optional)${opt("look", ["", "classic", "clay", "poster", "pixel"], "", ["off", "classic wobble", "clay", "poster (paper cut-out)", "pixel"])}</label>
+        <div class="row" data-social><label>Stop-motion look (optional)${opt("look", ["", "classic", "clay", "poster", "pixel"], "", ["off", "classic wobble", "clay", "poster (paper cut-out)", "pixel"])}</label>
           <label>Drawings per second${opt("fps", ["12","10","8"], "12")}</label></div>
-        <label style="color:var(--ink)"><input type="checkbox" name="write_copy" ${d.claude ? "checked" : "disabled"} style="width:auto">
+        <label style="color:var(--ink)" data-social><input type="checkbox" name="write_copy" ${d.claude ? "checked" : "disabled"} style="width:auto">
           Let Claude write the hook, title, captions and hashtags${d.claude ? "" : " (needs ANTHROPIC_API_KEY)"}</label>
       </div>
       <div id="edphotos" hidden>
@@ -743,7 +754,7 @@ async function renderEdit(v) {
           <label style="color:var(--ink)"><input type="checkbox" name="pingpong" style="width:auto"> Forward then backward</label></div>
         <label>Sound or voice-over (optional)<input type="file" name="sound" accept="audio/*,video/*"></label>
       </div>
-      <label>Hook on screen for the first 2 seconds (optional${d.claude ? "; Claude writes one if blank" : ""})<input name="hook_text" maxlength="80"></label>
+      <label data-social>Hook on screen for the first 2 seconds (optional${d.claude ? "; Claude writes one if blank" : ""})<input name="hook_text" maxlength="80"></label>
       <label>Title (optional)<input name="title"></label>
       <label>Caption (optional)<textarea name="caption"></textarea></label>
       <div class="row" style="margin-top:12px"><button class="btn approve" type="submit">Edit it</button></div>
@@ -753,10 +764,21 @@ async function renderEdit(v) {
       <td>${{queued: "waiting", working: "editing...", ready: "<b>ready</b>", failed: "<b class='s-lo'>failed</b>"}[e.status] || e.status}${e.error ? `<br><span class="muted">${esc(e.error)}</span>` : ""}
         ${e.clip && e.clip.checks ? editLine(e.clip.checks.edit) : ""}</td>
       <td>${e.clip ? `<video src="/media/clip/${e.clip.id}" controls preload="metadata" style="width:110px"></video>` : ""}</td>
-      <td>${e.clip ? `<a class="btn plain" href="#${e.clip.status === "review" ? "review" : e.clip.status}">Open in ${e.clip.status === "review" ? "Needs review" : esc(e.clip.status)}</a>` : ""}
+      <td>${e.clip ? `<a class="btn plain" href="#${tabFor(e.clip.status)[0]}">Open in ${tabFor(e.clip.status)[1]}</a>` : ""}
         ${e.status === "failed" ? `<button class="btn plain" data-retry="${e.id}">Try again</button>` : ""}</td></tr>`).join("")}</table></div>`
       : `<div class="empty">Nothing edited yet.</div>`}`;
   const form = $("#edform", v);
+  form.sales_script.onchange = async () => {
+    const box = $("#edproof", v), id = form.sales_script.value;
+    v.querySelectorAll("[data-social]").forEach(el => el.hidden = !!id);   // social-only options don't apply
+    if (!id) { box.innerHTML = ""; form.aspect.value = "9:16"; return; }
+    form.aspect.value = "16:9";
+    const p = await api(`/api/studio/sales/${id}/proof`);
+    box.innerHTML = `<p class="muted">Add a photo or screenshot for any proof line. It fills the screen while you say that line.
+      Film the whole script in one take; a mess-up is fine, pause and say the line again.</p>
+      ${p.slots.map(s => `<label>Line ${s.line + 1}: "${esc(s.say)}"<br><span class="muted">Show: ${esc(s.show)}</span>
+        <input type="file" accept="image/*" data-proofline="${s.line}"></label>`).join("")}`;
+  };
   const isPhotos = () => [...form.files.files].some(f => f.type.startsWith("image/"));
   form.files.onchange = () => { $("#edphotos", v).hidden = !isPhotos(); $("#edvideo", v).hidden = isPhotos(); };
   v.querySelectorAll("[data-retry]").forEach(b => b.onclick = () => api(`/api/edits/${b.dataset.retry}/retry`, {}).then(load));
@@ -768,7 +790,11 @@ async function renderEdit(v) {
       : {pace: f.pace.value, caption_style: f.caption_style.value, crop_mode: f.crop_mode.value, write_copy: f.write_copy.checked,
          stopmotion: f.look.value ? {look: f.look.value, fps: Number(f.fps.value)} : null};
     Object.assign(options, {hook_text: f.hook_text.value, title: f.title.value, caption: f.caption.value});
+    if (!photos) { options.aspect = f.aspect.value; if (f.sales_script.value) options.sales = {script_id: Number(f.sales_script.value)}; }
     const fd = new FormData();
+    const proofLines = [];
+    form.querySelectorAll("[data-proofline]").forEach(el => { if (el.files[0]) { fd.append("proofs", el.files[0]); proofLines.push(Number(el.dataset.proofline)); } });
+    fd.append("proof_lines", JSON.stringify(proofLines));
     [...f.files.files].forEach(x => fd.append("files", x));
     if (photos && f.sound.files[0]) fd.append("sound", f.sound.files[0]);
     fd.append("options", JSON.stringify(options));
@@ -870,7 +896,52 @@ async function renderResearch(v) {
 
 // ---------------------------------------------------------------- script studio
 let studioTimer = null;
+function salesCard(s) {
+  const sc = s.script;
+  const blocks = Object.entries(sc.blocks || {}).map(([b, x]) => `${b.toLowerCase()} ${Math.round(x.seconds)}s`).join(" · ");
+  let current = null;
+  return `<div class="card" style="display:block" data-sid="${s.id}">
+    <div class="row" style="align-items:baseline"><b style="flex:3">Sales video: ${esc(sc.title)}</b>
+      <span class="muted">about ${(sc.length / 60).toFixed(1)} min at ${Math.round(sc.wpm)} wpm${s.status === "shot" ? " · filmed" : ""}</span></div>
+    <div class="muted">${esc(blocks)}</div>
+    <p><b>The big idea:</b> ${esc(sc.big_idea)}</p>
+    ${sc.placeholders.length || sc.missing.length ? `<p class="s-mid"><b>Fill in before filming:</b> ${[...sc.placeholders, ...sc.missing].map(esc).join("; ")}</p>` : ""}
+    ${sc.warnings.map(w => `<p class="s-mid" style="margin:4px 0">${esc(w)}</p>`).join("")}
+    ${sc.lines.map((l, i) => { const head = l.block !== current ? `<h4 style="margin:12px 0 4px">${esc(l.block.toLowerCase())}</h4>` : ""; current = l.block;
+      return `${head}<div style="margin:6px 0"><span class="muted">${i + 1}. ${esc(l.beat_name)} · ${esc(l.timecode)}</span><br>${esc(l.say)}
+        <br><span class="muted">SHOW</span> ${esc(l.show)}</div>`; }).join("")}
+    ${(sc.flags||[]).length ? `<div class="muted"><b>${sc.flags.length} line${sc.flags.length>1?"s":""} still sound written</b>: ${sc.flags.map(f => esc(f.where)).join(", ")}</div>` : ""}
+    <div class="row" style="margin-top:8px"><a class="btn plain" href="/api/studio/scripts/${s.id}.txt" download>Teleprompter (.txt)</a>
+      <a class="btn plain" href="/api/studio/scripts/${s.id}.md" download>Download script</a>
+      <a class="btn approve" href="#edit">Filmed it? Edit it</a></div></div>`;
+}
+function salesForm(claude) {
+  const obj = n => `<details ${n === 1 ? "open" : ""}><summary>Objection ${n}${n > 3 ? " (optional)" : ""}</summary>
+    <label>What do they think that stops them buying?<input data-obj="${n}" data-k="think" placeholder="e.g. I've tried coaching before and it didn't work"></label>
+    <label>Why is that wrong?<input data-obj="${n}" data-k="wrong"></label>
+    <label>What's actually true?<input data-obj="${n}" data-k="right"></label>
+    <label>Proof (a real client, result or example)<input data-obj="${n}" data-k="proof"></label></details>`;
+  return `<form id="salesform" style="margin-top:12px">
+    <p class="muted">Answer like you'd say it to a customer on a call. Your words become the lines: Claude only puts them in order and
+      tightens them, and anything you leave out becomes a blank to fill, never an invented claim.</p>
+    <div class="row"><label>What you sell<input name="offer" placeholder="e.g. 1:1 discipline coaching, 12 weeks"></label>
+      <label>Where it plays<select name="placement"><option value="landing">Landing page, before a call</option>
+        <option value="booked">Sent after someone books</option><option value="checkout">Page where they buy directly</option></select></label></div>
+    <div class="row"><label>Who it's for<input name="audience"></label><label>Who it's not for<input name="not_for"></label></div>
+    <label>The promise: what do people get when you're done?<textarea name="promise"></textarea></label>
+    <label>The pain: what do customers tell you on the first call?<textarea name="pain"></textarea></label>
+    <label>Proof: your best 3 results, one per line (real names, numbers, before/afters)<textarea name="proof"></textarea></label>
+    <div class="row"><label>Your method's name<input name="method_name" placeholder="e.g. The Shadow Routine"></label></div>
+    <label>How it works, step by step<textarea name="method"></textarea></label>
+    ${[1, 2, 3, 4, 5].map(obj).join("")}
+    <div class="row"><label>The one thing to do<input name="cta" placeholder="e.g. Book a free 15-minute call below"></label>
+      <label>What happens after<input name="next_step" placeholder="e.g. We talk for 15 minutes and you get a plan, even if you don't join"></label></div>
+    <div class="row"><label>A real reason to act now (optional)<input name="urgency" placeholder="e.g. I take 5 new clients a month"></label>
+      <label>An honest flaw (optional, builds trust)<input name="flaw" placeholder="e.g. It's not for people who want a quick fix"></label></div>
+    <div class="row" style="margin-top:8px"><button class="btn approve" type="submit" ${claude ? "" : "disabled"}>Write my sales video</button></div></form>`;
+}
 function scriptCard(s) {
+  if (s.kind === "sales" && s.status !== "writing" && s.status !== "failed") return salesCard(s);
   const sc = s.script;
   if (s.status === "writing") return `<div class="card" style="display:block"><b>${esc(s.idea)}</b><p class="muted">Writing... (about a minute)</p></div>`;
   if (s.status === "failed") return `<div class="card" style="display:block"><b>${esc(s.idea)}</b><p class="s-lo">Failed: ${esc(s.error)}</p></div>`;
@@ -895,6 +966,7 @@ function scriptCard(s) {
       <button class="btn plain" data-copy="${s.id}">Copy script</button>
       ${s.status !== "shot" ? `<button class="btn approve" data-shot="${s.id}">I shot it</button>` : ""}</div></div>`;
 }
+let studioMode = "short";
 async function renderStudio(v) {
   clearTimeout(studioTimer);
   const d = await api("/api/studio");
@@ -904,7 +976,10 @@ async function renderStudio(v) {
       timed beats with what to say, show and film, one comment-keyword CTA, caption, cover and title. Unknown numbers stay as
       {{your number}}: nothing is invented. Pace: <b>${Math.round(d.wpm)} wpm</b> (from your voice file or measured from your clips).</p>
     ${d.claude ? "" : `<p class="s-lo">The studio needs ANTHROPIC_API_KEY in .env.</p>`}
-    <form id="stnew"><label>The idea (what happened, to whom, what it cost or returned)<textarea name="idea" placeholder="e.g. I stopped checking my phone for the first hour of the day for 30 days; here's what changed"></textarea></label>
+    <div class="row" style="margin-bottom:8px"><button class="btn ${studioMode === "short" ? "approve" : "plain"}" data-mode="short">Short video</button>
+      <button class="btn ${studioMode === "sales" ? "approve" : "plain"}" data-mode="sales">Sales video (for an offer)</button></div>
+    ${studioMode === "sales" ? salesForm(d.claude) : ""}
+    <form id="stnew" ${studioMode === "sales" ? "hidden" : ""}><label>The idea (what happened, to whom, what it cost or returned)<textarea name="idea" placeholder="e.g. I stopped checking my phone for the first hour of the day for 30 days; here's what changed"></textarea></label>
       <div class="row"><button class="btn approve" type="submit" ${d.claude ? "" : "disabled"}>Write the script</button>
         <a class="btn plain" href="#research" style="text-align:center">Or start from a winner in Niche research</a></div></form>
     <details style="margin-top:12px"><summary>Your voice (how you talk, your proof bank)</summary>
@@ -919,6 +994,17 @@ async function renderStudio(v) {
       <div class="row"><button class="btn approve" id="staudsave">Save audience</button></div></details></div>
   <h3>Scripts</h3>
   ${d.scripts.length ? `<div class="grid">${d.scripts.map(scriptCard).join("")}</div>` : `<div class="empty">No scripts yet.</div>`}`;
+  v.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { studioMode = b.dataset.mode; load(); });
+  const sf = $("#salesform", v);
+  if (sf) sf.onsubmit = async e => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(sf));
+    const objs = {};
+    sf.querySelectorAll("[data-obj]").forEach(el => { (objs[el.dataset.obj] ||= {})[el.dataset.k] = el.value; });
+    body.objections = Object.keys(objs).sort().map(k => objs[k]);
+    await api("/api/studio/sales", body);
+    toast("Writing your sales video... about a minute."); load();
+  };
   $("#stnew", v).onsubmit = async e => {
     e.preventDefault();
     await api("/api/studio/scripts", {idea: e.target.idea.value});

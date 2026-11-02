@@ -48,7 +48,13 @@ def clean_options(raw: dict, kind: str) -> dict:
         "hook_text": str(raw.get("hook_text") or "").strip()[:80],
         "title": str(raw.get("title") or "").strip()[:200],
         "caption": str(raw.get("caption") or "").strip()[:2200],
+        "aspect": "16:9" if raw.get("aspect") == "16:9" else "9:16",
     }
+    sales = raw.get("sales") or {}
+    if kind == "video" and sales.get("script_id"):
+        # A sales video filmed from a Script studio sales script: proof images go on their lines.
+        o["sales"] = {"script_id": int(sales["script_id"])}
+        o["write_copy"] = False
     if kind == "photos":
         fps = int(raw.get("fps") or 12)
         o.update({"fps": fps if fps in DRAWING_RATES else 12,
@@ -60,8 +66,10 @@ def clean_options(raw: dict, kind: str) -> dict:
     return o
 
 
-def create(cfg: Config, conn, files: list[Path], options: dict, audio: Path | None = None) -> int:
-    """Store the uploads and queue the edit. Returns the edit id."""
+def create(cfg: Config, conn, files: list[Path], options: dict, audio: Path | None = None,
+           proofs: list[tuple[int, Path]] | None = None) -> int:
+    """Store the uploads and queue the edit. Returns the edit id. `proofs` are (script line, image) pairs
+    for a sales video."""
     files = [Path(f) for f in files]
     videos = [f for f in files if f.suffix.lower() in VIDEO_EXTS]
     photos = [f for f in files if f.suffix.lower() in IMAGE_EXTS]
@@ -75,6 +83,11 @@ def create(cfg: Config, conn, files: list[Path], options: dict, audio: Path | No
         raise ValueError("The sound file must be mp3, wav, m4a, aac, flac or ogg")
     kind = "video" if videos else "photos"
     opts = clean_options(options, kind)
+    for _, image in proofs or []:
+        if Path(image).suffix.lower() not in IMAGE_EXTS:
+            raise ValueError("Proof must be a photo or screenshot (jpg, png, webp...)")
+    if proofs and not opts.get("sales"):
+        raise ValueError("Proof images go with a sales video: pick its script first")
     now = db.iso(db.utcnow())
     name = videos[0].name if videos else f"{len(photos)} photos"
     edit_id = conn.execute("INSERT INTO edits(kind, name, options, status, created_at, updated_at) VALUES (?,?,?,?,?,?)",
@@ -90,6 +103,12 @@ def create(cfg: Config, conn, files: list[Path], options: dict, audio: Path | No
         dest = folder / ("sound" + Path(audio).suffix.lower())
         shutil.move(str(audio), dest)
         opts["sound"] = dest.name
+    if proofs:
+        opts["sales"]["proof"] = {}
+        for line, image in proofs:
+            dest = folder / f"proof_{int(line):03d}{Path(image).suffix.lower()}"
+            shutil.move(str(image), dest)
+            opts["sales"]["proof"][str(int(line))] = dest.name
     opts["files"] = stored
     db.update_edit(conn, edit_id, options=opts)
     db.log_event(conn, "edit_queued", edit_id, {"kind": kind, "name": name})
@@ -156,6 +175,11 @@ def process(cfg: Config, conn, edit_id: int, llm=None, transcriber=None) -> int:
     clip = {"start": 0.0, "end": round(info["duration"], 3), "score": 0, "reason": "your upload",
             "hook": (build_sentences(words)[0]["text"] if words else "")[:200],
             "title": opts["title"] or Path(row["name"]).stem, "caption": opts["caption"], "hashtags": []}
+    sales = opts.get("sales")
+    if sales:
+        script = json.loads(conn.execute("SELECT script_json FROM scripts WHERE id=?",
+                                          (sales["script_id"],)).fetchone()["script_json"] or "{}")
+        clip.update({"title": opts["title"] or script.get("title") or clip["title"], "reason": "sales video"})
     use_claude = opts["write_copy"] and len(words) >= 8 and (llm is not None or secret("ANTHROPIC_API_KEY"))
     if use_claude:
         if llm is None:
@@ -172,10 +196,18 @@ def process(cfg: Config, conn, edit_id: int, llm=None, transcriber=None) -> int:
     clip["checks"] = polish(clip)
     recipe = default_recipe(cfg, clip)
     recipe.update({"upload": True, "jumpcut": opts["pace"], "stopmotion": opts["stopmotion"],
-                   "hook_overlay": bool(recipe["hook_text"])})
+                   "hook_overlay": bool(recipe["hook_text"]), "aspect": opts.get("aspect", "9:16")})
+    if (info["width"] > info["height"]) != (recipe["aspect"] == "16:9"):
+        recipe["crop_mode"] = "blur_pad"   # a phone held the other way: fit it, don't crop most of it away
     for key in ("caption_style", "crop_mode"):
         if opts[key]:
             recipe[key] = opts[key]
+    if sales:
+        lines = script.get("lines", [])
+        recipe.update({"sales": True, "script_id": sales["script_id"], "outro_cta": False, "hook_overlay": False,
+                       "proof_cards": [{"text": lines[int(n)]["say"], "image": str(folder / name)}
+                                       for n, name in sorted((sales.get("proof") or {}).items(), key=lambda kv: int(kv[0]))
+                                       if int(n) < len(lines)]})
     clip_id = db.insert_clip(conn, stream_id, clip, "pending", recipe)
     out = cfg.subdir("clips") / f"upload_{edit_id:04d}" / f"clip_{clip_id:05d}_v1.mp4"
     render_clip(cfg, source, clip, words, recipe, out, info)

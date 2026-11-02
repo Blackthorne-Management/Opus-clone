@@ -140,8 +140,9 @@ CREATE TABLE IF NOT EXISTS research_posts (
 -- Script studio (studio.py): shoot-ready scripts for new videos.
 CREATE TABLE IF NOT EXISTS scripts (
     id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'short', -- short (social video) | sales (sales video, salesvideo.py)
     idea TEXT NOT NULL,
-    based_on TEXT,                    -- JSON: the research post it was modelled on, if any
+    based_on TEXT,                    -- JSON: the research post it was modelled on, or a sales video's intake
     status TEXT NOT NULL,             -- writing | ready | failed | shot
     script_json TEXT,
     error TEXT,
@@ -222,6 +223,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for name, ddl in (("step", "TEXT"), ("trial", "INTEGER NOT NULL DEFAULT 0"), ("file_path", "TEXT")):
         if pcols and name not in pcols:
             conn.execute(f"ALTER TABLE posts ADD COLUMN {name} {ddl}")
+    script_cols = {r["name"] for r in conn.execute("PRAGMA table_info(scripts)")}
+    if script_cols and "kind" not in script_cols:
+        conn.execute("ALTER TABLE scripts ADD COLUMN kind TEXT NOT NULL DEFAULT 'short'")
 
 
 def log_event(conn: sqlite3.Connection, kind: str, ref: Any = None, detail: Any = None) -> None:

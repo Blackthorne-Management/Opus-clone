@@ -420,6 +420,26 @@ voice from my clips** reads your best clips' transcripts and writes `brand\my-vo
 the numbers you'll say on camera under "Proof I can say out loud". `brand\my-audience.md` describes your one viewer
 and offer. Download or copy each script as Markdown. Each script costs one or two Claude calls.
 
+### Sales video (Script studio → Sales video)
+
+One video that sells one offer, for a landing page (above a "book a call" button), for people who just booked, or
+for a page where they buy directly. It follows the usual sales-conversation shape: **intro** (promise, pain, proof,
+plan, how long it takes), **your method** with its name, **3-5 objections** each answered in four moves (what they
+think, why that's wrong, what's actually true, proof), and **one call to action**.
+
+1. **Answer the questions** the way you'd say it to a customer on a call. Claude only orders and tightens your
+   answers into short spoken lines. Anything you didn't give (a result, a proof) becomes a `{{blank}}`, never an
+   invented claim. The card warns you about an intro over 90 s, a method over 3 minutes, an objection with no proof,
+   more than one call to action, and long lines.
+2. **Film it** in one take from the **Teleprompter (.txt)** download. If you mess up, pause and say the line again:
+   the jump cuts keep the last take.
+3. **Edit a video** → *What is it?* → your sales script. Pick 16:9 for a website or YouTube, and add a photo or
+   screenshot for any proof line: it fills the screen while you say that line (the app finds the moment in your
+   take, even if you didn't read it word for word). The result waits in Needs review with a **Download video**
+   button; sales videos are never scheduled to social media.
+
+The structure follows Alex Hormozi's public teaching on sales videos; the code and prompts are this app's own.
+
 ---
 
 ## 6. Tuning with real results
@@ -538,6 +558,7 @@ kir_clipper/
   editor.py       "Edit a video": uploads -> review clips
   research.py     niche research: outliers vs each creator's median (from master-skills /virality)
   studio.py       script studio: voice profile, scripts, hook pick, timing (from master-skills /virality)
+  salesvideo.py   sales video scripts from your own answers: intro, method, objections, one CTA; checks
   virality/       hook scorer + 26-formula library, AI-tell cleaner, detector, collector, speech timing
                   (copied from master-skills /virality, MIT, origin headers kept; humanize bugs fixed)
   captions.py     ASS word-by-word caption styles (hormozi [default], bold_pop, karaoke, boxed, minimal)

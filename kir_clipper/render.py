@@ -7,8 +7,10 @@ is meaningfully different from every earlier one.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
+import re
 import shutil
 import statistics
 import tempfile
@@ -110,8 +112,10 @@ def _detect_face_center(source: Path, start: float, end: float, samples: int) ->
 
 
 def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int, face_x: float | None,
-                      has_logo: bool, ass_name: str, fonts_dir: Path | None, src: str = "0:v") -> str:
-    """`src` is the input video label: "0:v", or the output of the jump-cut chain."""
+                      has_logo: bool, ass_name: str, fonts_dir: Path | None, src: str = "0:v",
+                      cards: list[tuple[int, float, float]] | None = None) -> str:
+    """`src` is the input video label: "0:v", or the output of the jump-cut chain. `cards` are full-screen proof
+    images as (input index, start, end) on the output timeline (sales videos)."""
     src_w, src_h = info["width"], info["height"]
     mode = recipe.get("crop_mode", "center")
     chains = []
@@ -157,6 +161,13 @@ def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int
         chains.append(f"[{last}]{stopmotion_filter(out_w, out_h, fps, stop)}[stop]")
         last = "stop"
 
+    for k, (idx, s, e) in enumerate(cards or []):
+        # The proof fills the frame while its line is spoken; the voice and captions carry on over it.
+        chains.append(f"[{idx}:v]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+                      f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:color=0x111111,format=yuv420p,setsar=1[card{k}];"
+                      f"[{last}][card{k}]overlay=0:0:enable='between(t,{s:.3f},{e:.3f})'[pc{k}]")
+        last = f"pc{k}"
+
     if has_logo:
         corner = recipe.get("watermark_corner", "tr")
         pos = {"tr": "W-w-48:64", "tl": "48:64", "br": "W-w-48:H-h-64", "bl": "48:H-h-64"}.get(corner, "W-w-48:64")
@@ -178,6 +189,8 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
     info = info or media.probe(source)
     r = cfg.get("render")
     out_w, out_h = int(r.get("width", 1080)), int(r.get("height", 1920))
+    if recipe.get("aspect") == "16:9":           # landscape (sales videos for a web page)
+        out_w, out_h = max(out_w, out_h), min(out_w, out_h)
     fps = int(r.get("fps", 30))
     start = float(clip["start"]) + float(recipe.get("trim_start", 0.0))
     end = float(clip["end"]) - float(recipe.get("trim_end", 0.0))
@@ -214,6 +227,17 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
     encoder = media.pick_encoder(r.get("encoder", "auto"))
     report = {"duration_in": round(duration, 2), "duration_out": round(out_duration, 2),
               "jumpcut": None, "audio": None}
+    placed = []
+    if recipe.get("proof_cards"):
+        report["proof_cards"] = []
+        for card in recipe["proof_cards"]:
+            span = locate_line(card["text"], words)
+            image = Path(card["image"])
+            ok = span is not None and image.exists()
+            report["proof_cards"].append({"text": card["text"][:120], "placed": ok,
+                                          **({"start": round(span[0], 2), "end": round(span[1], 2)} if ok else {})})
+            if ok:
+                placed.append((image, span[0], min(out_duration, span[1])))
     with tempfile.TemporaryDirectory(prefix="kir_render_") as tmp:
         tmpdir = Path(tmp)
         # ffmpeg runs with cwd=tmpdir so the subtitle file can be referenced by bare name.
@@ -223,13 +247,17 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
         if cuts:
             pre.append(jumpcut.video_chain(cuts["frames"], fps, "0:v", "cut"))
             src = "cut"
-        graph = build_filtergraph(info, recipe, out_w, out_h, fps, face_x, has_logo, "captions.ass", fonts_dir, src)
+        first_card = 2 if has_logo else 1
+        graph = build_filtergraph(info, recipe, out_w, out_h, fps, face_x, has_logo, "captions.ass", fonts_dir, src,
+                                  [(first_card + k, s, e) for k, (_, s, e) in enumerate(placed)])
         if has_audio:
             pre.append(jumpcut.audio_chain(cuts["keeps"], settings["crossfade_ms"]) if cuts else "[0:a:0]anull[acut]")
         graph = ";".join(pre + [graph])
         args = ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
         if has_logo:
             args += ["-i", str(logo)]
+        for image, _, _ in placed:
+            args += ["-loop", "1", "-t", f"{out_duration + 1:.3f}", "-i", str(image)]
         args += ["-filter_complex", graph, "-map", "[vout]"]
         if has_audio:
             # Raw PCM here; the audio is encoded once, by the mastering pass below.
@@ -263,6 +291,35 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
              f", {cuts['removed']:.1f}s cut" if cuts else "", recipe.get("crop_mode"), recipe.get("caption_style"),
              recipe.get("zoom"), ", stop motion" if recipe.get("stopmotion") else "")
     return out_path
+
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in (re.sub(r"[^\w']+", "", w.lower()) for w in text.split()) if t]
+
+
+def locate_line(text: str, words: list[dict], min_ratio: float = 0.6) -> tuple[float, float] | None:
+    """Where a scripted line was said, on the clip's own timeline: the window of transcribed words that best
+    matches it (people never read a line exactly). None when nothing matches well enough."""
+    want = _tokens(text)
+    heard = [_tokens(w["w"])[0] if _tokens(w["w"]) else "" for w in words]
+    n = len(want)
+    if not n or len(heard) < max(2, n // 2):
+        return None
+    best, best_i, best_len = 0.0, None, n
+    for size in {max(1, n - 2), n, n + 2}:
+        for i in range(0, max(1, len(heard) - size + 1)):
+            r = difflib.SequenceMatcher(None, want, heard[i:i + size], autojunk=False).ratio()
+            if r > best:
+                best, best_i, best_len = r, i, size
+    if best_i is None or best < min_ratio:
+        return None
+    lo, hi = best_i, min(len(words), best_i + best_len)
+    wanted = set(want)
+    while hi - lo > 1 and heard[lo] not in wanted:        # the window can spill onto a neighbouring word
+        lo += 1
+    while hi - lo > 1 and heard[hi - 1] not in wanted:
+        hi -= 1
+    return words[lo]["s"], words[hi - 1]["e"] + 0.25
 
 
 def srt_from_words(words: list[dict], duration: float) -> str:
