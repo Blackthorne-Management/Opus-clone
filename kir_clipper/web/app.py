@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -156,11 +157,12 @@ def create_app(cfg: Config) -> FastAPI:
         return out
 
     @app.get("/media/clip/{clip_id}")
-    def clip_media(clip_id: int):
+    def clip_media(clip_id: int, download: int = 0):
         row = db.get_clip(conn(), clip_id)
         if not row or not row["file_path"] or not Path(row["file_path"]).exists():
             raise HTTPException(404)
-        return FileResponse(row["file_path"], media_type="video/mp4")
+        name = re.sub(r"[^\w\- ]+", "", row["title"] or "")[:60].strip() or f"clip_{clip_id}"
+        return FileResponse(row["file_path"], media_type="video/mp4", filename=f"{name}.mp4" if download else None)
 
     @app.get("/media/clip/{clip_id}/srt")
     def clip_srt(clip_id: int):
@@ -573,6 +575,34 @@ def create_app(cfg: Config) -> FastAPI:
         db.update_script(conn(), script_id, status=body["status"])
         return {"ok": True}
 
+    @app.post("/api/studio/sales")
+    def studio_sales(body: dict = Body(...)):
+        from ..salesvideo import start
+        llm = _claude()
+        try:
+            sid = start(cfg, conn(), body, llm=llm)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "id": sid}
+
+    @app.get("/api/studio/sales/{script_id}/proof")
+    def studio_sales_proof(script_id: int):
+        from ..salesvideo import proof_slots
+        row = conn().execute("SELECT kind, script_json FROM scripts WHERE id=?", (script_id,)).fetchone()
+        if not row or row["kind"] != "sales" or not row["script_json"]:
+            raise HTTPException(404, "That sales script isn't ready")
+        return {"slots": proof_slots(json.loads(row["script_json"]))}
+
+    @app.get("/api/studio/scripts/{script_id}.txt")
+    def studio_teleprompter(script_id: int):
+        from fastapi.responses import PlainTextResponse
+        row = conn().execute("SELECT script_json FROM scripts WHERE id=?", (script_id,)).fetchone()
+        script = json.loads(row["script_json"]) if row and row["script_json"] else {}
+        if not script.get("teleprompter"):
+            raise HTTPException(404)
+        return PlainTextResponse(script["teleprompter"], headers={"Content-Disposition":
+                                 f'attachment; filename="teleprompter_{script_id}.txt"'})
+
     @app.get("/api/studio/scripts/{script_id}.md")
     def studio_markdown(script_id: int):
         from fastapi.responses import PlainTextResponse
@@ -598,11 +628,11 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/edits")
     def edits_new(files: list[UploadFile] = File(...), sound: UploadFile | None = File(None),
-                  options: str = Form("{}")):
+                  options: str = Form("{}"), proofs: list[UploadFile] | None = File(None), proof_lines: str = Form("[]")):
         from ..editor import create, kick, safe_name
         tmp = cfg.subdir("edits") / "incoming"
         tmp.mkdir(parents=True, exist_ok=True)
-        saved, sound_path = [], None
+        saved, sound_path, proof_paths = [], None, []
         try:
             for up in files:
                 if not up.filename:
@@ -616,11 +646,17 @@ def create_app(cfg: Config) -> FastAPI:
                 with open(sound_path, "wb") as fh:
                     shutil.copyfileobj(sound.file, fh, 8 * 1024 * 1024)
             try:
-                edit_id = create(cfg, conn(), saved, json.loads(options or "{}"), sound_path)
-            except (ValueError, json.JSONDecodeError) as exc:
+                lines = [int(x) for x in json.loads(proof_lines or "[]")]
+                for n, up in zip(lines, [p for p in (proofs or []) if p.filename]):
+                    dest = tmp / f"proof{n}_{safe_name(up.filename)}"
+                    with open(dest, "wb") as fh:
+                        shutil.copyfileobj(up.file, fh, 8 * 1024 * 1024)
+                    proof_paths.append((n, dest))
+                edit_id = create(cfg, conn(), saved, json.loads(options or "{}"), sound_path, proof_paths)
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 raise HTTPException(400, str(exc))
         finally:
-            for f in saved + ([sound_path] if sound_path else []):
+            for f in saved + ([sound_path] if sound_path else []) + [p for _, p in proof_paths]:
                 f.unlink(missing_ok=True)   # moved into the edit's folder on success
         kick(cfg)
         return {"ok": True, "id": edit_id}
