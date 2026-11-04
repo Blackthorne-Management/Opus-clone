@@ -27,7 +27,8 @@ and writes scripts in your voice. It runs on your own Windows PC, under your own
 
 1. Open the **Auto-Clipper** folder and double-click **Install.bat**.
 2. If Windows shows "Windows protected your PC", click **More info** → **Run anyway**.
-3. It asks to install **Python** and **FFmpeg** if you don't have them. Answer **Y**.
+3. It asks to install **Python**, **FFmpeg** and **Node.js** if you don't have them. Answer **Y**.
+   (Node.js is only for **Animate an ad**; everything else works without it.)
    - If it then says to close the window and run it again, do that.
 4. It installs the app. The first time takes a few minutes.
 5. Paste your **Claude API key** when it asks, then press Enter.
@@ -66,6 +67,8 @@ The app starts in **dry run**: it finds, scores and renders clips, but posts not
 
 Other tabs to try:
 - **Edit a video**: drop any phone video and get a finished vertical edit.
+- **Animate an ad**: fill in a short brief (and add screenshots or a logo if you have them) and get 1-5
+  animated ads with different hooks, ready to download.
 - **Niche research**: find which posts are beating other creators' usual numbers.
 - **Script studio**: write a script for a new video. Click **Build my voice from my clips** after your
   first stream.

@@ -760,6 +760,74 @@ def create_app(cfg: Config) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
+    # ------------------------------------------------------------ animate an ad (HyperFrames)
+
+    @app.get("/api/ads")
+    def ads_get():
+        from .. import animate
+        from ..config import secret
+        ok, why = animate.ready()
+        return {"ads": animate.list_ads(conn()), "ready": ok, "why": why, "claude": bool(secret("ANTHROPIC_API_KEY")),
+                "lengths": list(animate.LENGTHS), "aspects": list(animate.ASPECTS)}
+
+    @app.post("/api/ads")
+    def ads_new(brief: str = Form("{}"), images: list[UploadFile] | None = File(None), labels: str = Form("[]"),
+                music: UploadFile | None = File(None)):
+        from .. import animate
+        from ..editor import safe_name
+        ok, why = animate.ready()
+        if not ok:
+            raise HTTPException(400, why)
+        llm = _claude()
+        tmp = cfg.subdir("ads") / "incoming"
+        tmp.mkdir(parents=True, exist_ok=True)
+        saved, music_path = [], None
+        try:
+            names = json.loads(labels or "[]")
+            for i, up in enumerate([u for u in (images or []) if u.filename][: animate.MAX_IMAGES]):
+                dest = tmp / f"{i}_{safe_name(up.filename)}"
+                with open(dest, "wb") as fh:
+                    shutil.copyfileobj(up.file, fh, 8 * 1024 * 1024)
+                label = str(names[i]).strip()[:120] if i < len(names) and str(names[i]).strip() else Path(up.filename).stem
+                saved.append((label, dest))
+            if music is not None and music.filename:
+                music_path = tmp / ("music_" + safe_name(music.filename))
+                with open(music_path, "wb") as fh:
+                    shutil.copyfileobj(music.file, fh, 8 * 1024 * 1024)
+            batch = animate.create(cfg, conn(), json.loads(brief or "{}"), saved, music_path, llm=llm)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(400, str(exc))
+        finally:
+            for f in [p for _, p in saved] + ([music_path] if music_path else []):
+                f.unlink(missing_ok=True)   # moved into the ad's folder on success
+        return {"ok": True, "id": batch}
+
+    @app.post("/api/ads/{ad_id}/render")
+    def ads_render(ad_id: int, body: dict = Body(default={})):
+        from .. import animate
+        try:
+            animate.rerender(cfg, conn(), ad_id, body.get("scenes"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True}
+
+    @app.post("/api/ads/{ad_id}/open")
+    def ads_open(ad_id: int):
+        from .. import animate
+        try:
+            return {"ok": True, "state": animate.open_editor(cfg, conn(), ad_id)}
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.get("/media/ad/{ad_id}")
+    def ad_media(ad_id: int, download: int = 0):
+        row = conn().execute("SELECT name, variant, video_path FROM ads WHERE id=?", (ad_id,)).fetchone()
+        if not row or not row["video_path"] or not Path(row["video_path"]).exists():
+            raise HTTPException(404)
+        name = re.sub(r"[^\w\- ]+", "", row["name"] or "")[:50].strip() or "ad"
+        return FileResponse(row["video_path"], media_type="video/mp4",
+                            filename=f"{name} v{row['variant']}.mp4" if download else None)
+
     @app.get("/api/events")
     def events(limit: int = 100):
         return [dict(r) for r in conn().execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))]

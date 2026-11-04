@@ -63,6 +63,23 @@ if (-not $PyVer) {
 }
 if (-not $ok) { if (-not $Quiet) { Read-Host "Press Enter to close" }; exit 1 }
 
+# Node.js 22+ runs HyperFrames, which renders "Animate an ad". Optional: the rest of the app works without it.
+function Node-Major {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return 0 }
+    $v = (& node --version) 2>$null
+    if ($v -match '^v(\d+)') { return [int]$Matches[1] }
+    return 0
+}
+if ((Node-Major) -lt 22) {
+    if ((Get-Command winget -ErrorAction SilentlyContinue) -and (Ask "Node.js 22 or newer (for 'Animate an ad') is not installed. Install it now with winget?")) {
+        winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements --silent
+        Refresh-Path
+    }
+    if ((Node-Major) -lt 22) {
+        Write-Host "Skipping 'Animate an ad' for now (needs Node.js 22+ from nodejs.org). Everything else works." -ForegroundColor Yellow
+    }
+}
+
 $Py = Join-Path $Repo ".venv\Scripts\python.exe"
 if (Test-Path $Py) {
     $venvVer = (& $Py -c "import sys; print('%d.%d' % sys.version_info[:2])") 2>$null
@@ -97,6 +114,24 @@ if (-not (Test-Path ".env")) {
         if ($key.Trim()) {
             (Get-Content ".env") -replace '^ANTHROPIC_API_KEY=.*$', "ANTHROPIC_API_KEY=$($key.Trim())" | Set-Content ".env" -Encoding ascii
             Write-Host "Saved to .env" -ForegroundColor Green
+        }
+    }
+}
+
+if ((Node-Major) -ge 22) {
+    Write-Host "Getting HyperFrames and its browser ready for 'Animate an ad' (one time, a few hundred MB)..."
+    $env:HYPERFRAMES_NO_TELEMETRY = "1"; $env:HYPERFRAMES_SKIP_SKILLS = "1"
+    cmd /c "npx --yes hyperframes@0.9.13 browser ensure"
+    if ($LASTEXITCODE -ne 0) { Write-Host "HyperFrames will finish setting up the first time you make an ad." -ForegroundColor Yellow }
+
+    # Optional extras for Claude Code (the coding app), not for this app.
+    if (-not $Quiet -and (Get-Command claude -ErrorAction SilentlyContinue)) {
+        if (Ask "Also add the HyperFrames skills to Claude Code (so you can ask it to design videos)?" "n") {
+            cmd /c "npx --yes hyperframes@0.9.13 skills update"
+        }
+        if (Ask "Also add the Claude Ads skill to Claude Code (audits ad account exports; from github.com/AgriciDaniel/claude-ads)?" "n") {
+            claude plugin marketplace add AgriciDaniel/claude-ads
+            claude plugin install claude-ads@ai-marketing-hub-claude-ads
         }
     }
 }

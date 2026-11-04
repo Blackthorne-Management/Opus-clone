@@ -164,6 +164,24 @@ CREATE TABLE IF NOT EXISTS edits (
     updated_at TEXT NOT NULL
 );
 
+-- Animated ads (animate.py). One row per variation; `batch` is the id of the first variation.
+CREATE TABLE IF NOT EXISTS ads (
+    id INTEGER PRIMARY KEY,
+    batch INTEGER NOT NULL,
+    variant INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    brief TEXT NOT NULL,              -- JSON: product, offer, audience, cta, length, aspect, ...
+    angle TEXT,                       -- the hook idea of this variation
+    scenes TEXT,                      -- JSON storyboard with timings
+    status TEXT NOT NULL,             -- planning | queued | rendering | ready | failed
+    project_path TEXT,                -- the HyperFrames project folder
+    video_path TEXT,
+    report TEXT,                      -- JSON: missing, music, sfx, ...
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Notes on clips in plain words (notes.py), and whether they became a rule in your style.
 CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY,

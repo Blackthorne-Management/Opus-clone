@@ -86,6 +86,9 @@ def cmd_doctor(args) -> int:
     if not ytdlp_available():
         print("  [--] yt-dlp not installed: Niche research can't fetch YouTube Shorts (paste or upload instead). "
               ".venv\\Scripts\\python -m pip install yt-dlp")
+    from .animate import ready as animate_ready
+    can_animate, why = animate_ready()
+    print("  [OK] Animate an ad (Node.js + HyperFrames)" if can_animate else f"  [--] Animate an ad is off: {why}")
     logo = cfg.get("brand.logo")
     if logo and not cfg.resolve(logo).exists():
         print(f"  [--] logo not found at {cfg.resolve(logo)}: clips render without a watermark")
@@ -146,8 +149,10 @@ def cmd_serve(args) -> int:
     import uvicorn
     from .web.app import create_app
     from .editor import resume
+    from . import animate
     cfg, conn = _ctx(args)
     resume(cfg, conn)
+    animate.resume(cfg, conn)
     host, port = dashboard_bind(cfg, args.port)
     uvicorn.run(create_app(cfg), host=host, port=port, log_level="warning")
     return 0
@@ -324,6 +329,8 @@ def cmd_run(args) -> int:
 
     from .editor import resume
     resume(cfg, conn)  # uploads queued in "Edit a video" before a restart
+    from . import animate
+    animate.resume(cfg, conn)  # ads that were mid-render get a "Render again" button
 
     if not args.no_dashboard:
         host, port = dashboard_bind(cfg, args.port)

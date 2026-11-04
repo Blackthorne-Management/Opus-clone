@@ -80,7 +80,7 @@
 <script>
 const TABS = [
   ["review", "Needs review"], ["dry_run", "Would auto-post"], ["approved,scheduled", "Scheduled"],
-  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["edit", "Edit a video"], ["longform", "Long-form"],
+  ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["edit", "Edit a video"], ["ads", "Animate an ad"], ["longform", "Long-form"],
   ["research", "Niche research"], ["studio", "Script studio"], ["style", "My style"], ["import", "Import posted reel"], ["posts", "Post calendar"],
   ["stats", "Stats"], ["events", "Activity log"], ["settings", "Settings"],
 ];
@@ -190,7 +190,7 @@ async function api(path, body) {
 }
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => {
-    const n = k.includes("posts")||["stats","events","longform","import","settings","edit","research","studio","style"].includes(k) ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
+    const n = k.includes("posts")||["stats","events","longform","import","settings","edit","ads","research","studio","style"].includes(k) ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
     return `<button class="${k===current?"on":""}" data-k="${k}">${l}${n!==""?` (${n})`:""}</button>`;
   }).join("");
   $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { current = b.dataset.k; location.hash = current; load(); });
@@ -378,6 +378,7 @@ async function load() {
   if (current === "research") { await renderResearch(v); return; }
   if (current === "studio") { await renderStudio(v); return; }
   if (current === "style") { await renderStyle(v); return; }
+  if (current === "ads") { await renderAds(v); return; }
   if (current === "settings") { await renderSettings(v); return; }
   if (current === "stats") {
     const h = summary.histogram, max = Math.max(1, ...h);
@@ -841,6 +842,100 @@ async function renderEdit(v) {
     } finally { btn.disabled = false; btn.textContent = "Edit it"; }
   };
   if (d.edits.some(e => ["queued", "working"].includes(e.status))) editTimer = setTimeout(() => current === "edit" && load(), 8000);
+}
+
+// ---------------------------------------------------------------- animate an ad (HyperFrames)
+let adsTimer = null;
+const AD_STATUS = {planning: "Claude is writing the storyboard...", queued: "waiting to render", rendering: "rendering...",
+  ready: "<b>ready</b>", failed: "<b class='s-lo'>failed</b>"};
+async function renderAds(v) {
+  clearTimeout(adsTimer);
+  const d = await api("/api/ads");
+  const opt = (name, opts, sel, labels) => `<select name="${name}">${opts.map((o, i) => `<option value="${o}" ${String(o)===String(sel)?"selected":""}>${labels ? labels[i] : o}</option>`).join("")}</select>`;
+  const batches = {};
+  d.ads.forEach(a => (batches[a.batch] = batches[a.batch] || []).push(a));
+  v.innerHTML = `<div class="card" style="display:block;max-width:820px">
+    <h3 style="margin-top:0">Animate an ad</h3>
+    <p class="muted">A designed 15-60 second ad (big moving words, your screenshots and logo, music and whooshes) from a short brief,
+      in up to 5 versions with different hooks so you can test them. Claude only uses what you write here: it never makes up
+      results, reviews or prices. Made with HyperFrames.</p>
+    ${d.ready ? "" : `<p class="s-mid"><b>${esc(d.why)}</b></p>`}
+    ${d.claude ? "" : `<p class="s-mid"><b>Needs your Claude key</b> (ANTHROPIC_API_KEY in .env).</p>`}
+    <form id="adform">
+      <label>What's the ad for? (product, program or offer)<input name="product" required maxlength="300" placeholder="The Shadow Routine: a 10-week cohort fitness challenge"></label>
+      <label>Who is it for?<input name="audience" maxlength="300" placeholder="Busy guys who keep quitting the gym by week two"></label>
+      <label>Their problem, in their words<textarea name="pain" placeholder="I start strong and I'm gone by Wednesday"></textarea></label>
+      <label>What they get (one per line)<textarea name="benefits"></textarea></label>
+      <label>The offer (price, bonus, deadline: only what's real)<input name="offer" maxlength="300"></label>
+      <label>Proof (a real result, number or quote; leave blank if you don't have one)<textarea name="proof"></textarea></label>
+      <div class="row"><label>What should they do at the end?<input name="cta" required maxlength="120" placeholder="Join the next cohort"></label>
+        <label>Link or handle shown at the end<input name="handle" maxlength="120" placeholder="theshadowroutine.app"></label></div>
+      <div class="row"><label>Length${opt("length", d.lengths, 30, d.lengths.map(x => x + " seconds"))}</label>
+        <label>Shape${opt("aspect", d.aspects, "9:16", ["9:16 (Reels, TikTok, Shorts)", "1:1 (feed)", "16:9 (YouTube, web)", "4:5 (feed)"])}</label>
+        <label>Versions${opt("variations", [1,2,3,4,5], 3)}</label></div>
+      <div class="row"><label>Background${opt("ground", ["dark","light"], "dark", ["dark", "light"])}</label>
+        <label>Sound effects${opt("sfx", ["light","full","off"], "light", ["whoosh on each scene", "more (ticks on lists)", "off"])}</label></div>
+      <label>Screenshots, product photos or your logo (up to 6, optional)<input type="file" name="images" accept="image/*" multiple></label>
+      <div id="adlabels"></div>
+      <label>Music (optional; mixed under and faded out)<input type="file" name="music" accept="audio/*"></label>
+      <label>Anything else (tone, words to use or avoid)<input name="notes" maxlength="500"></label>
+      <div class="row" style="margin-top:12px"><button class="btn approve" type="submit" ${d.ready && d.claude ? "" : "disabled"}>Make the ads</button></div>
+    </form></div>
+    <h3>Your ads</h3>
+    ${Object.keys(batches).length ? Object.values(batches).sort((a, b) => b[0].batch - a[0].batch).map(group => {
+      group.sort((a, b) => a.variant - b.variant);
+      const first = group[0], missing = ((first.report || {}).missing || []);
+      return `<div class="card" style="display:block">
+        <b>${esc(first.name)}</b> <span class="muted">· ${first.brief.length}s · ${esc(first.brief.aspect)}</span>
+        ${missing.length ? `<div class="muted">Would be stronger with: ${missing.map(esc).join("; ")}</div>` : ""}
+        <div class="tablewrap"><table>${group.map(a => `<tr>
+          <td>v${a.variant}<br><span class="muted">${esc(a.angle || "")}</span></td>
+          <td>${AD_STATUS[a.status] || esc(a.status)}${a.error ? `<br><span class="muted">${esc(a.error.slice(-300))}</span>` : ""}
+            ${a.report && a.report.seconds ? `<div class="muted">${a.report.music ? "music + " : ""}${a.report.sfx} sound effect${a.report.sfx === 1 ? "" : "s"}</div>` : ""}</td>
+          <td>${a.has_video ? `<video src="/media/ad/${a.id}" controls preload="metadata" style="width:120px"></video>` : ""}</td>
+          <td>${a.has_video ? `<a class="btn approve" href="/media/ad/${a.id}?download=1">Download</a>` : ""}
+            ${a.scenes ? `<button class="btn plain" data-adwords="${a.id}">Change words</button>` : ""}
+            ${["ready","failed"].includes(a.status) && a.scenes ? `<button class="btn plain" data-adrender="${a.id}">Render again</button>` : ""}
+            ${a.project_path && a.status === "ready" ? `<button class="btn plain" data-adopen="${a.id}" title="Opens HyperFrames' own editor in a browser on this PC: move things, change timing, swap fonts, and export from there. 'Render again' here starts over from the storyboard.">Edit in HyperFrames</button>` : ""}</td></tr>`).join("")}</table></div></div>`;
+    }).join("") : `<div class="empty">No ads yet.</div>`}`;
+  const form = $("#adform", v);
+  form.images.onchange = () => {
+    $("#adlabels", v).innerHTML = [...form.images.files].slice(0, 6).map((f, i) =>
+      `<label>What does "${esc(f.name)}" show?<input data-adlabel="${i}" maxlength="120" placeholder="e.g. the leaderboard screen, our logo"></label>`).join("");
+  };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const f = form, fd = new FormData();
+    const brief = Object.fromEntries(["product","audience","pain","benefits","offer","proof","cta","handle","notes","length","aspect","variations","ground","sfx"].map(k => [k, f[k].value]));
+    fd.append("brief", JSON.stringify(brief));
+    [...f.images.files].slice(0, 6).forEach(x => fd.append("images", x));
+    fd.append("labels", JSON.stringify([...v.querySelectorAll("[data-adlabel]")].map(el => el.value)));
+    if (f.music.files[0]) fd.append("music", f.music.files[0]);
+    const btn = form.querySelector("button[type=submit]"); btn.disabled = true; btn.textContent = "Uploading...";
+    try {
+      const r = await fetch("/api/ads", {method: "POST", body: fd});
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(j.detail || "Couldn't start", true); return; }
+      toast("Started. Claude writes the storyboards, then each version renders (about a minute each).");
+      load();
+    } finally { btn.disabled = false; btn.textContent = "Make the ads"; }
+  };
+  v.querySelectorAll("[data-adrender]").forEach(b => b.onclick = () => api(`/api/ads/${b.dataset.adrender}/render`, {}).then(load));
+  v.querySelectorAll("[data-adopen]").forEach(b => b.onclick = () => api(`/api/ads/${b.dataset.adopen}/open`, {})
+    .then(() => toast("Opening HyperFrames' editor in your browser (the first time takes a minute).")));
+  v.querySelectorAll("[data-adwords]").forEach(b => b.onclick = async () => {
+    const a = d.ads.find(x => x.id === Number(b.dataset.adwords));
+    const html = `<h3 style="margin-top:0">Change the words (v${a.variant})</h3><p class="muted">Up to 7 words on screen per scene. Timing and designs stay the same.</p>` +
+      a.scenes.map((s, i) => `<label>${i + 1}. ${esc(s.kind)} (${s.seconds}s)<input id="h${i}" value="${esc(s.headline)}" maxlength="80"></label>` +
+        (s.items.length ? `<label>List (one per line)<textarea id="i${i}">${esc(s.items.join("\n"))}</textarea></label>`
+          : `<label class="muted">Small line<input id="s${i}" value="${esc(s.sub)}" maxlength="120"></label>`)).join("");
+    if (await modal(`<div style="max-height:60vh;overflow:auto">${html}</div>`, [{label: "Render with these words", kind: "approve", value: 1}, {label: "Cancel", value: 0}]) !== 1) return;
+    const fl = modal.fields;
+    const scenes = a.scenes.map((s, i) => ({headline: fl["h" + i], sub: fl["s" + i] ?? s.sub,
+      items: fl["i" + i] !== undefined ? fl["i" + i].split("\n").filter(x => x.trim()) : s.items}));
+    await api(`/api/ads/${a.id}/render`, {scenes}); toast("Rendering again..."); load();
+  });
+  if (d.ads.some(a => ["planning", "queued", "rendering"].includes(a.status))) adsTimer = setTimeout(() => current === "ads" && load(), 6000);
 }
 
 // ---------------------------------------------------------------- niche research
