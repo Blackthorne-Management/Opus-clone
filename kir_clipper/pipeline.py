@@ -199,6 +199,7 @@ def edit_clip(cfg: Config, conn, clip_id: int, changes: dict) -> None:
     clip = db.clip_dict(row)
     text_fields = {k: changes[k] for k in ("title", "caption", "hook", "hashtags", "platform_captions") if k in changes}
     recipe = dict(clip["recipe"] or default_recipe(cfg, clip))
+    before = dict(recipe)
     recipe_changes = changes.get("recipe") or {}
     bounds = {k: float(changes[k]) for k in ("start", "end") if changes.get(k) not in (None, "")}
     needs_render = bool(recipe_changes) or any(abs(bounds[k] - clip[k]) > 0.01 for k in bounds)
@@ -225,7 +226,9 @@ def edit_clip(cfg: Config, conn, clip_id: int, changes: dict) -> None:
     checks = {**(db.clip_dict(db.get_clip(conn, clip_id)).get("checks") or {}), "edit": edit_summary(out)}
     db.update_clip(conn, clip_id, recipe_json=recipe, file_path=str(out), start=clip["start"], end=clip["end"],
                    checks=checks)
-    db.log_event(conn, "clip_rerendered", clip_id, {"recipe": recipe_changes, "bounds": bounds,
+    # Only what actually changed, so My style can spot the changes you keep making by hand.
+    changed = {k: v for k, v in recipe_changes.items() if before.get(k) != v}
+    db.log_event(conn, "clip_rerendered", clip_id, {"recipe": changed, "bounds": bounds,
                                                      "previous_file": str(old) if old else None})
 
 

@@ -28,9 +28,10 @@ CROP_MODES = ("face", "center", "blur_pad")
 ZOOM_MODES = ("none", "punch", "slow_push")
 
 
-def default_recipe(cfg: Config, clip: dict) -> dict:
+def default_recipe(cfg: Config, clip: dict, use_style: bool = True) -> dict:
+    """The recipe a new clip starts from: config defaults, then your saved style and rules (style.py)."""
     d = dict(cfg.get("render.default_recipe") or {})
-    return {
+    recipe = {
         "version": 1,
         "caption_style": d.get("caption_style", "hormozi"),
         "caption_position": d.get("caption_position", "lower"),
@@ -52,7 +53,24 @@ def default_recipe(cfg: Config, clip: dict) -> dict:
         # Tight jump cuts inside the clip (pauses, ums, retakes): tight | normal | loose | off
         "jumpcut": (cfg.get("jumpcut.pace", "tight") if cfg.get("jumpcut.enabled", True) else "off"),
         "stopmotion": None,  # or {"look": classic|clay|poster|pixel, "fps": 8|10|12}
+        # Caption tweaks on top of the caption style (None = the style's own value)
+        "caption_size": 1.0,
+        "caption_y": None,
+        "caption_words": None,
+        "caption_font": None,
+        "primary_color": None,
+        "highlight_color": None,
+        "emphasis_color": None,
+        # The hook word sits behind your head (depth.py); behind_text picks the word, blank = automatic
+        "behind_word": bool(cfg.get("depth.enabled", False)),
+        "behind_text": "",
+        # Sound effects under your voice (sfx.py): off | light | medium | full
+        "sfx": cfg.get("sfx.default", "light"),
     }
+    if use_style:
+        from .style import apply
+        apply(cfg, recipe)
+    return recipe
 
 
 def filter_path(p: Path) -> str:
@@ -238,10 +256,29 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
                                           **({"start": round(span[0], 2), "end": round(span[1], 2)} if ok else {})})
             if ok:
                 placed.append((image, span[0], min(out_duration, span[1])))
+    # The hook word behind your head (depth.py): pick it now so captions and sound effects can follow it.
+    look = dict(recipe)
+    behind = None
+    if recipe.get("behind_word") and words:
+        from .depth import pick_word
+        behind = pick_word(words, recipe.get("behind_text") or "")
+        if behind is None:
+            report["behind"] = {"placed": False, "word": recipe.get("behind_text") or "",
+                                "reason": ("you don't say that word in this clip" if recipe.get("behind_text")
+                                           else "no strong word in the first few seconds")}
+        else:
+            look["hook_overlay"] = False      # the big word is the hook; don't stack a second one on top
+    hook_at = behind["s"] if behind else (0.05 if look.get("hook_overlay") and (look.get("hook_text") or "").strip() else None)
     with tempfile.TemporaryDirectory(prefix="kir_render_") as tmp:
         tmpdir = Path(tmp)
         # ffmpeg runs with cwd=tmpdir so the subtitle file can be referenced by bare name.
-        (tmpdir / "captions.ass").write_text(build_ass(words, out_duration, recipe, brand, out_w, out_h), encoding="utf-8")
+        (tmpdir / "captions.ass").write_text(build_ass(words, out_duration, look, brand, out_w, out_h), encoding="utf-8")
+        sfx_track = None
+        if has_audio:
+            from . import sfx
+            evts = sfx.events(look, words, out_duration, fps, hook_at)
+            sfx_track = sfx.track(cfg, evts, out_duration, tmpdir / "sfx.wav")
+            report["sfx"] = {"level": look.get("sfx") or "off", "count": len(evts)}
         src = "0:v"
         pre = []
         if cuts:
@@ -252,16 +289,21 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
                                   [(first_card + k, s, e) for k, (_, s, e) in enumerate(placed)])
         if has_audio:
             pre.append(jumpcut.audio_chain(cuts["keeps"], settings["crossfade_ms"]) if cuts else "[0:a:0]anull[acut]")
+            if sfx_track:                      # effects under the voice, before mastering sets the level
+                sfx_idx = first_card + len(placed)
+                pre.append(f"[acut][{sfx_idx}:a]amix=inputs=2:duration=first:normalize=0[amixed]")
         graph = ";".join(pre + [graph])
         args = ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
         if has_logo:
             args += ["-i", str(logo)]
         for image, _, _ in placed:
             args += ["-loop", "1", "-t", f"{out_duration + 1:.3f}", "-i", str(image)]
+        if sfx_track:
+            args += ["-i", str(sfx_track)]
         args += ["-filter_complex", graph, "-map", "[vout]"]
         if has_audio:
             # Raw PCM here; the audio is encoded once, by the mastering pass below.
-            args += ["-map", "[acut]", "-c:a", "pcm_s16le", "-ar", "48000"]
+            args += ["-map", "[amixed]" if sfx_track else "[acut]", "-c:a", "pcm_s16le", "-ar", "48000"]
         args += media.encoder_args(encoder, int(r.get("crf", 20)), int(r.get("nvenc_cq", 23)))
         tmp_out = tmpdir / ("pre.mkv" if has_audio else "out.mp4")
         args += ([] if has_audio else ["-movflags", "+faststart"]) + [str(tmp_out)]
@@ -275,6 +317,16 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
                 media.ffmpeg(*args, cwd=tmpdir)
             else:
                 raise
+        if behind:
+            from . import depth
+            layered = tmpdir / ("depth" + tmp_out.suffix)
+            try:
+                report["behind"] = depth.render(cfg, tmp_out, layered, behind, fps, out_duration)
+            except Exception as exc:
+                log.exception("Word behind the head failed; keeping the clip without it")
+                report["behind"] = {"word": behind["text"], "placed": False, "reason": f"it failed ({exc})"[:200]}
+            if report["behind"].get("placed"):
+                tmp_out = layered
         if has_audio:
             final = tmpdir / "out.mp4"
             report["audio"] = audio.finish(tmp_out, final, cfg, r.get("audio_bitrate", "192k"))

@@ -77,8 +77,9 @@ if (-not (Test-Path $Py)) {
 }
 Write-Host "Installing the app (the first time takes a few minutes)..."
 & $Py -m pip install --upgrade pip --quiet
-# whisper = local transcription, faces = speaker-aware reframing, research = public Shorts for Niche research
-& $Py -m pip install -e ".[whisper,faces,research]" --progress-bar off
+# whisper = local transcription, faces = speaker-aware reframing, research = public Shorts for Niche research,
+# depth = the cut-out model for the word behind your head
+& $Py -m pip install -e ".[whisper,faces,research,depth]" --progress-bar off
 if ($LASTEXITCODE -ne 0) { throw "Installing the app failed (the reason is in the lines above). Check your internet connection and run Install.bat again." }
 
 # GPU transcription needs NVIDIA's cuBLAS/cuDNN runtime. Installing via pip is the simplest route.
