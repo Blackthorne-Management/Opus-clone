@@ -32,6 +32,8 @@ openai = ["openai>=1.30"]
 research = ["yt-dlp>=2025.1"]
 # Auto cut-out of your photo for thumbnails (only needed if your photos lack a transparent background).
 thumbs = ["rembg>=2.0"]
+# The hook word behind your head: the person cut-out model (downloads ~170 MB on first use).
+depth = ["rembg>=2.0"]
 dev = ["pytest>=8"]
 
 [project.scripts]

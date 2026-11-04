@@ -73,6 +73,25 @@ jumpcut:
   max_cut_ratio: 0.4        # never remove more than this share of a clip; eases off instead
   crossfade_ms: 30          # audio crossfade at each join (no clicks)
 
+# Your editing style lives in brand/my-style.json (My style tab: learned from reference videos, plus the rules
+# you save from notes on clips). It's applied on top of render.default_recipe for every new clip.
+style:
+  file: brand/my-style.json
+
+# The hook word behind your head (needs the cut-out model: Install.bat adds it; ~0.4 s per frame on a CPU).
+depth:
+  enabled: false            # on for every clip; or turn it on in My style / per clip
+  model: u2net_human_seg    # birefnet-portrait gives finer hair but needs a lot of memory (16 GB+)
+  hold_seconds: 3.0         # how long the word stays up
+  word_width: 0.85          # share of the frame width
+
+# Sound effects under your voice: a pop on the hook, whooshes on punch-in zooms, ticks on money/number words.
+# Your own sounds: brand/sfx/pop.wav, whoosh.wav, tick.wav (mp3/m4a work too).
+sfx:
+  default: light            # off | light (hook only) | medium (+ zooms) | full (+ emphasis words)
+  volume_db: -16            # effects level before mastering; the voice stays on top
+  folder: brand/sfx
+
 # Clip audio: one fixed gain to the target loudness, then a true-peak limiter (no compression on the voice).
 audio:
   target_lufs: -14

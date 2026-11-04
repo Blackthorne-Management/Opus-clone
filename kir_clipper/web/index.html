@@ -34,6 +34,7 @@
   .btn { border:0; padding:8px 12px; border-radius:6px; cursor:pointer; font-weight:600; }
   .btn:disabled { opacity:.5; cursor:default; }
   .tablewrap { overflow-x:auto; max-width:100%; }
+  .notebox { border-top:1px solid var(--line); padding-top:8px; }
   .approve { background:var(--ok); color:#fff; } .reject { background:var(--accent); color:#fff; } .plain { background:var(--line); color:var(--ink); }
   details summary { cursor:pointer; color:var(--muted); font-size:12px; }
   table { width:100%; border-collapse:collapse; background:var(--card); }
@@ -80,7 +81,7 @@
 const TABS = [
   ["review", "Needs review"], ["dry_run", "Would auto-post"], ["approved,scheduled", "Scheduled"],
   ["posted", "Posted"], ["dropped,rejected,failed", "Dropped / rejected"], ["edit", "Edit a video"], ["longform", "Long-form"],
-  ["research", "Niche research"], ["studio", "Script studio"], ["import", "Import posted reel"], ["posts", "Post calendar"],
+  ["research", "Niche research"], ["studio", "Script studio"], ["style", "My style"], ["import", "Import posted reel"], ["posts", "Post calendar"],
   ["stats", "Stats"], ["events", "Activity log"], ["settings", "Settings"],
 ];
 function toast(msg, err = false) {
@@ -189,7 +190,7 @@ async function api(path, body) {
 }
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => {
-    const n = k.includes("posts")||["stats","events","longform","import","settings","edit","research","studio"].includes(k) ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
+    const n = k.includes("posts")||["stats","events","longform","import","settings","edit","research","studio","style"].includes(k) ? "" : k.split(",").reduce((a, s) => a + ((summary.clips||{})[s]||0), 0);
     return `<button class="${k===current?"on":""}" data-k="${k}">${l}${n!==""?` (${n})`:""}</button>`;
   }).join("");
   $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { current = b.dataset.k; location.hash = current; load(); });
@@ -228,8 +229,10 @@ function editLine(e) {
     cards.some(x => !x.placed) ? ` (not found in what you said: ${cards.filter(x => !x.placed).map(x => `"${esc(x.text.slice(0, 40))}..."`).join(", ")})` : ""}</div>` : "";
   const names = {silence: "pause", filler: "um", retake: "retake"};
   const cuts = Object.entries(e.cuts || {}).map(([k, n]) => `${n} ${names[k] || k}${n > 1 ? "s" : ""}`).join(", ");
+  const extra = (e.behind ? (e.behind.placed ? ` · "${esc(e.behind.word)}" behind your head` : ` · word behind head skipped: ${esc(e.behind.reason)}`) : "")
+    + (e.sfx && e.sfx.count ? ` · ${e.sfx.count} sound effect${e.sfx.count > 1 ? "s" : ""}` : "");
   return cardLine + `<div class="muted">${e.removed ? `Tightened ${e.duration_in}s → ${e.duration_out}s (${cuts})` : "No jump cuts"}${
-    e.lufs != null ? ` · audio ${e.lufs} LUFS` : ""}${e.audio_note ? ` <span title="${esc(e.audio_note)}">ⓘ</span>` : ""}</div>`;
+    e.lufs != null ? ` · audio ${e.lufs} LUFS` : ""}${extra}${e.audio_note ? ` <span title="${esc(e.audio_note)}">ⓘ</span>` : ""}</div>`;
 }
 // Every jump cut on this clip; untick one to keep that moment in on the next re-render.
 function cutList(c) {
@@ -269,6 +272,9 @@ function clipCard(c) {
       <details><summary>Per-platform copy</summary>${Object.entries(c.copy).map(([p, v]) =>
         `<label>${p} title<input data-p="${p}" data-k="title" value="${esc(v.title)}"></label>
          <label>${p} caption<textarea data-p="${p}" data-k="caption">${esc(v.caption)}</textarea></label>`).join("")}</details>
+      ${r.imported ? "" : `<div class="notebox"><label>Tell it what to change, like you would an editor
+          <textarea data-note placeholder="e.g. captions a bit bigger and higher; start on 'nobody tells you this'; put 'money' behind my head"></textarea></label>
+        <div class="row"><button class="btn plain" data-a="note">Apply note</button></div><div data-noteout></div></div>`}
       ${r.imported ? "" : `<details><summary>Re-render (style, crop, zoom, timing)</summary>
         <div class="row">${sel("caption_style", styles, r.caption_style)}${sel("crop_mode", crops, r.crop_mode)}${sel("zoom", zooms, r.zoom)}</div>
         <div class="row"><label>Caption timing ${leadSel(r.caption_lead)}</label>
@@ -277,6 +283,14 @@ function clipCard(c) {
             `<option value="${o}" ${(r.stopmotion||{}).look===o||(!r.stopmotion&&!o)?"selected":""}>${o||"off"}</option>`).join("")}</select></label>
           <label>Drawings per second <select data-sm="fps">${[12,10,8].map(o =>
             `<option ${(r.stopmotion||{}).fps===o?"selected":""}>${o}</option>`).join("")}</select></label></div>
+        <div class="row"><label>Caption size<select data-r="caption_size">${[0.8, 1, 1.2, 1.4].map(x =>
+            `<option value="${x}" ${Number(r.caption_size || 1) === x ? "selected" : ""}>${x === 1 ? "normal" : x < 1 ? "smaller" : x === 1.2 ? "bigger" : "biggest"}</option>`).join("")}</select></label>
+          <label>Caption height<select data-r="caption_y">${[["", "style default"], [0.45, "middle"], [0.62, "chest"], [0.73, "lower"], [0.8, "lowest"]].map(([x, l]) =>
+            `<option value="${x}" ${String(r.caption_y ?? "") === String(x) ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label>Sound effects${sel("sfx", ["off","light","medium","full"], r.sfx || "off")}</label></div>
+        <div class="row"><label>Word behind my head<select data-r="behind_word"><option value="false">off</option>
+            <option value="true" ${r.behind_word ? "selected" : ""}>on</option></select></label>
+          <label>Which word (blank = automatic)<input data-r="behind_text" value="${esc(r.behind_text || "")}"></label></div>
         ${cutList(c)}
         <div class="row"><label>Start (s)<input data-b="start" value="${c.start}"></label><label>End (s)<input data-b="end" value="${c.end}"></label>
           <label>Hook overlay<input data-r="hook_text" value="${esc(r.hook_text)}"></label></div>
@@ -303,6 +317,22 @@ function wire() {
     const id = card.dataset.id;
     card.querySelectorAll("button[data-a]").forEach(b => b.onclick = async () => {
       const a = b.dataset.a, label = b.textContent;
+      if (a === "note") {
+        const note = $("[data-note]", card).value.trim(), out = $("[data-noteout]", card);
+        if (!note) { toast("Write what you'd like changed", true); return; }
+        b.disabled = true; b.textContent = "Working on it (re-rendering)...";
+        try {
+          const j = await api(`/api/clips/${id}/note`, {note});
+          out.innerHTML = `<p>${esc(j.reply)}${j.cannot_do ? `<br><span class="muted">Can't do: ${esc(j.cannot_do)}</span>` : ""}</p>
+            ${j.offer_rule ? `<button class="btn plain" data-rule="${j.id}">Do this on every clip from now on</button>` : ""}`;
+          const rb = $("[data-rule]", out);
+          if (rb) rb.onclick = async () => { await api(`/api/notes/${j.id}/rule`, {}); rb.replaceWith(Object.assign(document.createElement("span"),
+            {className: "muted", textContent: "Saved as a rule in My style."})); };
+          toast(j.rendered ? "Done. Watch the new version." : "Nothing to re-render for that note.");
+          if (j.rendered) { const vid = $("video", card); if (vid) vid.src = `/media/clip/${id}?t=${Date.now()}`; }
+        } finally { b.disabled = false; b.textContent = label; }
+        return;
+      }
       if (a === "reject" && !(await modal("<h3>Reject this clip?</h3><p>It won't be posted. You can still find it under Dropped / rejected.</p>",
           [{label: "Reject", value: true, kind: "reject"}, {label: "Cancel", value: false}]))) return;
       b.disabled = true;
@@ -316,6 +346,8 @@ function wire() {
           const look = $("[data-sm=look]", card).value;
           recipe.stopmotion = look ? {look, fps: Number($("[data-sm=fps]", card).value)} : null;
           recipe.jumpcut_keep = [...card.querySelectorAll("[data-cut]")].filter(x => !x.checked).map(x => Number(x.dataset.cut));
+          recipe.caption_size = Number(recipe.caption_size || 1); recipe.caption_y = recipe.caption_y ? Number(recipe.caption_y) : null;
+          recipe.behind_word = recipe.behind_word === "true";
           const body = {...collect(card), recipe}; card.querySelectorAll("[data-b]").forEach(el => body[el.dataset.b] = el.value);
           b.textContent = "Rendering..."; await api(`/api/clips/${id}/edit`, body);
         }
@@ -345,6 +377,7 @@ async function load() {
   if (current === "edit") { await renderEdit(v); return; }
   if (current === "research") { await renderResearch(v); return; }
   if (current === "studio") { await renderStudio(v); return; }
+  if (current === "style") { await renderStyle(v); return; }
   if (current === "settings") { await renderSettings(v); return; }
   if (current === "stats") {
     const h = summary.histogram, max = Math.max(1, ...h);
@@ -1024,6 +1057,78 @@ async function renderStudio(v) {
     try { await navigator.clipboard.writeText(md); toast("Script copied"); } catch { toast("Couldn't copy; use Download instead", true); }
   });
   if (d.scripts.some(s => s.status === "writing")) studioTimer = setTimeout(() => current === "studio" && load(), 6000);
+}
+// ---------------------------------------------------------------- my style
+let styleTimer = null;
+function knobInput(k, spec, value, def) {
+  const v = value ?? def;
+  if (spec.choices) return `<select data-knob="${k}"><option value="">default (${esc(def ?? "style's own")})</option>${spec.choices.map(c =>
+    `<option ${String(value ?? "") === String(c) ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+  if (spec.type === "bool") return `<select data-knob="${k}"><option value="">default (${def ? "on" : "off"})</option>
+    <option value="true" ${value === true ? "selected" : ""}>on</option><option value="false" ${value === false ? "selected" : ""}>off</option></select>`;
+  if (spec.range) return `<input data-knob="${k}" type="number" step="${spec.type === "int" ? 1 : 0.05}" min="${spec.range[0]}" max="${spec.range[1]}"
+    value="${value ?? ""}" placeholder="${esc(def ?? "style's own")}">`;
+  return `<input data-knob="${k}" type="text" value="${esc(value ?? "")}" placeholder="${esc(def ?? "brand colour")}" pattern="#[0-9A-Fa-f]{6}">`;
+}
+async function renderStyle(v) {
+  clearTimeout(styleTimer);
+  const d = await api("/api/style");
+  const p = d.proposal || {};
+  const proposal = p.status === "working" ? `<div class="card" style="display:block"><b>Reading your reference videos...</b>
+      <p class="muted">Usually about a minute. You can leave this page.</p></div>`
+    : p.status === "failed" ? `<div class="card" style="display:block"><b class="s-lo">Couldn't learn from those videos:</b> ${esc(p.error)}
+      <div class="row"><button class="btn plain" id="stdiscard">OK</button></div></div>`
+    : p.status === "ready" ? `<div class="card" style="display:block;border-color:var(--ok)"><h3 style="margin-top:0">The style in your videos</h3>
+      <p>${esc(p.proposal.summary)}</p><ul>${p.proposal.observations.map(o => `<li>${esc(o)}</li>`).join("")}</ul>
+      ${p.proposal.cannot_copy.length ? `<p class="muted">The clipper can't do: ${p.proposal.cannot_copy.map(esc).join("; ")}</p>` : ""}
+      ${(p.proposal.failed_links||[]).length ? `<p class="s-mid">Couldn't download: ${p.proposal.failed_links.map(esc).join(", ")}</p>` : ""}
+      <div class="settings"><section id="propknobs">${Object.entries(p.proposal.settings).map(([k, val]) =>
+        `<div class="setting"><span>${esc(d.knobs[k].label)}</span>${knobInput(k, d.knobs[k], val, d.defaults[k])}</div>`).join("")}</section></div>
+      <div class="row"><button class="btn approve" id="staccept">Save as my style</button><button class="btn plain" id="stdiscard">Discard</button></div></div>` : "";
+  v.innerHTML = `<div style="max-width:880px">
+    <div class="card" style="display:block"><h3 style="margin-top:0">My style</h3>
+      <p class="muted">The look every new clip starts from. Learn it from videos you like, set it by hand, and save notes from
+        clips as rules. Already-made clips keep their look until you re-render them.</p>
+      <h4>Learn it from 3 to 5 videos you like</h4>
+      <form id="learnform"><label>Videos (screen recordings are fine)<input type="file" name="files" accept="video/*" multiple></label>
+        <label>...or links, one per line (YouTube works best; Instagram and TikTok often block downloads)<textarea name="links"></textarea></label>
+        <div class="row"><button class="btn approve" type="submit" ${d.claude ? "" : "disabled"}>Learn this style</button></div>
+        ${d.claude ? "" : `<p class="s-lo">Needs ANTHROPIC_API_KEY in .env.</p>`}</form></div>
+    ${proposal}
+    ${d.suggestions.length ? `<div class="card" style="display:block;border-color:var(--warn)"><b>You keep changing these by hand</b>
+      ${d.suggestions.map(s => `<div class="row" style="align-items:center"><span style="flex:3">${esc(s.label)} → <b>${esc(s.value)}</b>
+        <span class="muted">(${s.count} recent clips)</span></span><button class="btn plain" data-suggest="${esc(s.knob)}" data-val='${esc(JSON.stringify(s.value))}'>Make it the default</button></div>`).join("")}</div>` : ""}
+    <div class="card" style="display:block"><h4 style="margin-top:0">Settings</h4>
+      ${d.depth ? "" : `<p class="s-mid">"Word behind my head" needs the cut-out model: run Install.bat again.</p>`}
+      <div class="settings"><section id="myknobs">${Object.entries(d.knobs).map(([k, spec]) =>
+        `<div class="setting"><span>${esc(spec.label)}</span>${knobInput(k, spec, d.saved[k], d.defaults[k])}</div>`).join("")}</section></div>
+      <div class="row"><button class="btn approve" id="stsave">Save settings</button></div></div>
+    <div class="card" style="display:block"><h4 style="margin-top:0">Rules from your notes</h4>
+      ${d.rules.length ? d.rules.map(r => `<div class="row" style="align-items:center"><span style="flex:3">${esc(r.text)}
+        <span class="muted">(${Object.entries(r.changes).map(([k, x]) => `${esc(k)}: ${esc(x)}`).join(", ")})</span></span>
+        <button class="btn plain" data-delrule="${r.id}">Remove</button></div>`).join("")
+        : `<p class="muted">None yet. On a clip, write a note like "captions a bit higher", then choose "Do this on every clip from now on".</p>`}</div></div>`;
+  const collectKnobs = box => {
+    const out = {};
+    box.querySelectorAll("[data-knob]").forEach(el => { if (el.value !== "") out[el.dataset.knob] = el.value; });
+    return out;
+  };
+  $("#learnform", v).onsubmit = async e => {
+    e.preventDefault();
+    const r = await fetch("/api/style/learn", {method: "POST", body: new FormData(e.target)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.detail || "Couldn't start", true); return; }
+    toast("Reading your videos... about a minute."); load();
+  };
+  $("#stsave", v).onclick = () => api("/api/style", {settings: collectKnobs($("#myknobs", v)), replace: true}).then(() => { toast("Style saved. New clips use it."); load(); });
+  const acc = $("#staccept", v);
+  if (acc) acc.onclick = () => api("/api/style/accept", {settings: collectKnobs($("#propknobs", v))}).then(() => { toast("Saved as your style."); load(); });
+  const dis = $("#stdiscard", v);
+  if (dis) dis.onclick = () => api("/api/style/discard", {}).then(load);
+  v.querySelectorAll("[data-delrule]").forEach(b => b.onclick = () => api(`/api/style/rules/${b.dataset.delrule}/delete`, {}).then(load));
+  v.querySelectorAll("[data-suggest]").forEach(b => b.onclick = () =>
+    api("/api/style", {settings: {[b.dataset.suggest]: JSON.parse(b.dataset.val)}}).then(() => { toast("Made it your default."); load(); }));
+  if (p.status === "working") styleTimer = setTimeout(() => current === "style" && load(), 6000);
 }
 window.addEventListener("hashchange", () => { current = location.hash.slice(1) || "review"; load(); });
 load();

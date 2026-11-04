@@ -671,6 +671,95 @@ def create_app(cfg: Config) -> FastAPI:
         kick(cfg)
         return {"ok": True}
 
+    # ------------------------------------------------------------ my style, notes
+
+    @app.get("/api/style")
+    def style_get():
+        from .. import style
+        from ..config import secret
+        from ..depth import available
+        data = style.load(cfg)
+        return {"settings": style.effective(cfg), "saved": data["settings"], "rules": data["rules"],
+                "learned": data.get("learned"), "proposal": style.read_proposal(cfg),
+                "suggestions": style.suggestions(cfg, conn()),
+                "knobs": {k: {"label": label, "type": typ.__name__,
+                              "choices": list(rule) if isinstance(rule, tuple) and typ is str else None,
+                              "range": list(rule) if isinstance(rule, tuple) and typ in (int, float) else None}
+                          for k, (typ, rule, label) in style.KNOBS.items()},
+                "defaults": style._defaults(cfg), "claude": bool(secret("ANTHROPIC_API_KEY")), "depth": available()}
+
+    @app.post("/api/style")
+    def style_set(body: dict = Body(...)):
+        from .. import style
+        try:
+            style.set_settings(cfg, body.get("settings") or {}, replace=bool(body.get("replace")))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        db.log_event(conn(), "style_saved", None, body.get("settings"))
+        return {"ok": True}
+
+    @app.post("/api/style/learn")
+    def style_learn(files: list[UploadFile] | None = File(None), links: str = Form("")):
+        from ..editor import safe_name
+        from .. import style
+        tmp = cfg.subdir("style_refs")
+        saved = []
+        for up in (files or [])[:5]:
+            if not up.filename:
+                continue
+            dest = tmp / safe_name(up.filename)
+            with open(dest, "wb") as fh:
+                shutil.copyfileobj(up.file, fh, 8 * 1024 * 1024)
+            saved.append(dest)
+        urls = [u.strip() for u in re.split(r"[\s,]+", links) if u.strip().startswith("http")][:5]
+        if not saved and not urls:
+            raise HTTPException(400, "Add 3 to 5 videos (files or links)")
+        style.start_learning(cfg, saved, urls, _claude())
+        return {"ok": True}
+
+    @app.post("/api/style/accept")
+    def style_accept(body: dict = Body(default={})):
+        from .. import style
+        try:
+            style.accept_proposal(cfg, body.get("settings"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        db.log_event(conn(), "style_learned", None)
+        return {"ok": True}
+
+    @app.post("/api/style/discard")
+    def style_discard():
+        from .. import style
+        style.proposal_path(cfg).unlink(missing_ok=True)
+        return {"ok": True}
+
+    @app.post("/api/style/rules/{rule_id}/delete")
+    def style_rule_delete(rule_id: str):
+        from .. import style
+        if not style.remove_rule(cfg, rule_id):
+            raise HTTPException(404)
+        return {"ok": True}
+
+    @app.post("/api/clips/{clip_id}/note")
+    def clip_note(clip_id: int, body: dict = Body(...)):
+        from ..notes import apply_note
+        llm = _claude()
+        try:
+            return apply_note(cfg, conn(), clip_id, str(body.get("note") or ""), llm)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except Exception as exc:
+            log.exception("Note failed")
+            raise HTTPException(500, f"Couldn't apply that note: {exc}")
+
+    @app.post("/api/notes/{note_id}/rule")
+    def note_rule(note_id: int):
+        from ..notes import save_rule
+        try:
+            return {"ok": True, "rule": save_rule(cfg, conn(), note_id)}
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
     @app.get("/api/events")
     def events(limit: int = 100):
         return [dict(r) for r in conn().execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))]

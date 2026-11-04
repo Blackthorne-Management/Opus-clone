@@ -164,6 +164,19 @@ CREATE TABLE IF NOT EXISTS edits (
     updated_at TEXT NOT NULL
 );
 
+-- Notes on clips in plain words (notes.py), and whether they became a rule in your style.
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY,
+    clip_id INTEGER NOT NULL REFERENCES clips(id),
+    note TEXT NOT NULL,
+    reply TEXT,
+    changes TEXT,                     -- JSON: the settings it changed
+    general INTEGER NOT NULL DEFAULT 0,
+    rule_text TEXT,
+    saved_rule INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_clips_status ON clips(status);
 CREATE INDEX IF NOT EXISTS idx_research_creator ON research_posts(creator);
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);

@@ -85,7 +85,19 @@ def build_ass(words: list[dict], duration: float, recipe: dict, brand: dict, wid
     style_name = recipe.get("caption_style", "hormozi")
     if style_name not in STYLE_PARAMS:
         style_name = "hormozi"
-    p = STYLE_PARAMS[style_name]
+    p = dict(STYLE_PARAMS[style_name])
+    # Your style's tweaks (style.py): size, words at a time, font and colours.
+    scale = float(recipe.get("caption_size") or 1.0)
+    if abs(scale - 1.0) > 0.01:
+        p["size"] = p["size"] * scale
+        if p.get("chars"):
+            p["chars"] = max(6, round(p["chars"] / scale))   # bigger words, fewer per line
+    if recipe.get("caption_words"):
+        p["words"] = int(recipe["caption_words"])
+    brand = {**brand, **{key: recipe[key] for key in ("primary_color", "highlight_color", "emphasis_color")
+                         if recipe.get(key)}}
+    if recipe.get("caption_font"):
+        brand["font"] = recipe["caption_font"]
     k = height / 1920  # sizes are designed for 1080x1920; scale for other resolutions
     size, outline_w, shadow_w = round(p["size"] * k), round(p["outline"] * k, 1), round(p["shadow"] * k, 1)
     font = brand.get("font", "Arial")
@@ -95,6 +107,8 @@ def build_ass(words: list[dict], duration: float, recipe: dict, brand: dict, wid
     outline = brand.get("outline_color", "#000000")
     position = recipe.get("caption_position", "lower")
     align, margin_v = (5, 0) if position == "middle" else (2, int(height * 0.27))
+    if recipe.get("caption_y"):                     # bottom of the captions at this share of the height
+        align, margin_v = 2, int(height * (1 - float(recipe["caption_y"])))
 
     back = ass_color(accent if style_name == "boxed" else outline, 0 if style_name == "boxed" else 96)
     out_col = ass_color(accent if style_name == "boxed" else outline)
