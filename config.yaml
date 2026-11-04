@@ -92,6 +92,11 @@ sfx:
   volume_db: -16            # effects level before mastering; the voice stays on top
   folder: brand/sfx
 
+# Animate an ad (HyperFrames, needs Node.js 22+). Music sits under the effects; both are mastered like clips.
+animate:
+  fps: 30
+  music_db: -6              # music level before mastering
+
 # Clip audio: one fixed gain to the target loudness, then a true-peak limiter (no compression on the voice).
 audio:
   target_lufs: -14
