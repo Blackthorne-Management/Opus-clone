@@ -286,3 +286,43 @@ def test_winner_breakdown_feeds_the_script(cfg, conn):
 def test_breakdown_needs_outliers(cfg, conn):
     with pytest.raises(ValueError):
         research.breakdown(cfg, conn, BreakdownLLM())
+
+
+def test_just_cut_the_dead_space(cfg, conn, tmp_path):
+    """Only the pauses come out: no captions, text, zooms or logo, and the video keeps its own size."""
+    take = talking_take(tmp_path / "raw.mp4")
+    edit_id = editor.create(cfg, conn, [take], {"cut_only": True, "pace": "off", "write_copy": True})
+    def no_claude(*a, **k):
+        raise AssertionError("a plain cut never calls Claude")
+    clip_id = editor.process(cfg, conn, edit_id, llm=no_claude, transcriber=WordsTranscriber())
+    clip = db.clip_dict(db.get_clip(conn, clip_id))
+    r = clip["recipe"]
+    assert r["cut_only"] and r["captions"] is False and r["aspect"] == "original"
+    assert not r["hook_overlay"] and not r["watermark"] and r["zoom"] == "none" and r["sfx"] == "off"
+    assert r["jumpcut"] == "tight"                                        # "off" makes no sense here
+    from kir_clipper import media
+    info = media.probe(clip["file_path"])
+    assert (info["width"], info["height"]) == (360, 640)                  # same shape as filmed
+    assert clip["checks"]["edit"]["removed"] > 0.8                       # the 1.6 s pause was cut
+
+
+def test_captions_can_be_turned_off(cfg, tmp_path):
+    from kir_clipper.captions import build_ass
+    words = [{"w": "hello", "s": 0.1, "e": 0.4}, {"w": "there", "s": 0.5, "e": 0.9}]
+    on = build_ass(words, 2.0, {"caption_style": "hormozi"}, {}, 360, 640)
+    off = build_ass([], 2.0, {"caption_style": "hormozi"}, {}, 360, 640)
+    assert "HELLO" in on.upper() and "HELLO" not in off.upper()
+    assert editor.clean_options({"captions": False}, "video")["captions"] is False
+    assert editor.clean_options({}, "video")["captions"] is True
+
+
+def test_sideways_phone_video_is_measured_upright(tmp_path):
+    from kir_clipper import media
+    flat = tmp_path / "flat.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=15:d=1",
+                    "-c:v", "libx264", "-preset", "ultrafast", str(flat)], check=True)
+    turned = tmp_path / "turned.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-display_rotation", "90", "-i", str(flat), "-c", "copy",
+                    str(turned)], check=True)
+    info = media.probe(turned)
+    assert (info["width"], info["height"]) == (360, 640)

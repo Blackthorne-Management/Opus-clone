@@ -49,7 +49,12 @@ def clean_options(raw: dict, kind: str) -> dict:
         "title": str(raw.get("title") or "").strip()[:200],
         "caption": str(raw.get("caption") or "").strip()[:2200],
         "aspect": "16:9" if raw.get("aspect") == "16:9" else "9:16",
+        # Only remove the dead space: no captions, text, zooms, logo or effects; same size and shape as filmed.
+        "cut_only": bool(raw.get("cut_only")),
+        "captions": raw.get("captions", True) is not False,
     }
+    if o["cut_only"]:
+        o.update({"write_copy": False, "stopmotion": None, "pace": o["pace"] if o["pace"] != "off" else "tight"})
     sales = raw.get("sales") or {}
     if kind == "video" and sales.get("script_id"):
         # A sales video filmed from a Script studio sales script: proof images go on their lines.
@@ -202,6 +207,12 @@ def process(cfg: Config, conn, edit_id: int, llm=None, transcriber=None) -> int:
     for key in ("caption_style", "crop_mode"):
         if opts[key]:
             recipe[key] = opts[key]
+    if not opts.get("captions", True):
+        recipe["captions"] = False
+    if opts.get("cut_only"):
+        recipe.update({"cut_only": True, "aspect": "original", "crop_mode": "center", "captions": False,
+                       "hook_overlay": False, "outro_cta": False, "zoom": "none", "watermark": False, "sfx": "off",
+                       "behind_word": False, "stopmotion": None})
     if sales:
         lines = script.get("lines", [])
         recipe.update({"sales": True, "script_id": sales["script_id"], "outro_cta": False, "hook_overlay": False,

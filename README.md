@@ -399,6 +399,11 @@ photo per drawing, optional sound or voice-over). The result waits in **Needs re
 controls, then follows the same five-step posting plan once you approve it. Uploads never post on their own.
 Command line: `kir edit take.mp4` (or `kir edit *.jpg --look clay`).
 
+**Just cut the dead space:** in Edit a video, choose *What do you want? → Just cut the dead space*. Only the pauses,
+ums and repeated lines come out: no captions, text, zooms, logo or effects, and the video keeps the size and shape you
+filmed. It has a **Download video** button. To drop captions from any other clip, set **Captions → off** under
+Re-render (the .srt caption file is still made).
+
 ### Niche research (new tab)
 
 Find what's already working. Paste posts (`creator | views | hook | url`), upload an analytics CSV, or fetch a

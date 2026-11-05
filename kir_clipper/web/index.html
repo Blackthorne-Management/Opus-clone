@@ -259,6 +259,7 @@ function clipCard(c) {
       <div class="row" style="align-items:baseline">${r.photos ? `<span class="pill" style="background:var(--line);color:var(--ink)">Stop motion from photos</span>`
         : r.imported ? `<span class="pill" style="background:var(--line);color:var(--ink)">Imported reel</span>`
         : r.sales ? `<span class="pill" style="background:var(--line);color:var(--ink)">Sales video${r.aspect === "16:9" ? " · 16:9" : ""}</span>`
+        : r.cut_only ? `<span class="pill" style="background:var(--line);color:var(--ink)">Dead space cut</span>`
         : r.upload && !c.score ? `<span class="pill" style="background:var(--line);color:var(--ink)">Your upload</span>`
         : `<span class="score ${scoreClass(c.score)}">${c.score}</span>${r.upload ? ` <span class="pill" style="background:var(--line);color:var(--ink)">Your upload</span>` : ""}`}
         <span class="muted">clip ${c.id}${c.version>1?` · re-edit v${c.version} of ${c.parent_clip_id}`:""} · ${c.duration}s · ${c.status}${c.note?` · ${esc(c.note)}`:""}</span></div>
@@ -293,6 +294,8 @@ function clipCard(c) {
         <div class="row"><label>Word behind my head<select data-r="behind_word"><option value="false">off</option>
             <option value="true" ${r.behind_word ? "selected" : ""}>on</option></select></label>
           <label>Which word (blank = automatic)<input data-r="behind_text" value="${esc(r.behind_text || "")}"></label></div>
+        <div class="row"><label>Captions<select data-r="captions"><option value="true">on</option>
+            <option value="false" ${r.captions === false ? "selected" : ""}>off</option></select></label></div>
         <div class="row"><label title="When you and a guest are both on screen, the clip is stacked: them on top, you below">Two people<select data-r="split_swap">
             <option value="false">guest on top, me below</option><option value="true" ${r.split_swap ? "selected" : ""}>swapped</option></select></label></div>
         ${cutList(c)}
@@ -301,6 +304,7 @@ function clipCard(c) {
         <button class="btn plain" data-a="render">Re-render</button>
       </details>`}
       <div class="row">
+        ${r.cut_only && c.file_path ? `<a class="btn approve" href="/media/clip/${c.id}?download=1" download>Download video</a>` : ""}
         ${r.sales ? `<a class="btn approve" href="/media/clip/${c.id}?download=1" download>Download video</a>`
           : canAct ? `<button class="btn approve" data-a="approve">Approve &amp; schedule</button>` : ""}
         <button class="btn plain" data-a="save">Save copy</button>
@@ -357,6 +361,7 @@ function wire() {
           recipe.caption_size = Number(recipe.caption_size || 1); recipe.caption_y = recipe.caption_y ? Number(recipe.caption_y) : null;
           recipe.behind_word = recipe.behind_word === "true";
           recipe.split_swap = recipe.split_swap === "true";
+          recipe.captions = recipe.captions !== "false";
           const body = {...collect(card), recipe}; card.querySelectorAll("[data-b]").forEach(el => body[el.dataset.b] = el.value);
           b.textContent = "Rendering..."; await api(`/api/clips/${id}/edit`, body);
         }
@@ -775,6 +780,10 @@ async function renderEdit(v) {
     ${d.transcription ? "" : `<p class="s-mid"><b>Transcription isn't installed on this PC</b>, so videos get no captions or jump cuts. Run scripts\\install.ps1 again.</p>`}
     <form id="edform">
       <label>Video, or photos for stop motion<input type="file" name="files" accept="video/*,image/*" multiple required></label>
+      <div class="row" id="edmode"><label>What do you want?<select name="mode">
+          <option value="full">Full edit: captions, hook, 9:16</option>
+          <option value="cut">Just cut the dead space (no captions or text, same size and shape)</option></select></label>
+        <label>Captions<select name="captions"><option value="on">on</option><option value="off">off</option></select></label></div>
       <div id="edvideo">
         <div class="row"><label>What is it?<select name="sales_script"><option value="">A short video for social</option>${salesScripts.map(s =>
             `<option value="${s.id}">Sales video: ${esc(s.script.title)}</option>`).join("")}</select></label>
@@ -822,8 +831,15 @@ async function renderEdit(v) {
       ${p.slots.map(s => `<label>Line ${s.line + 1}: "${esc(s.say)}"<br><span class="muted">Show: ${esc(s.show)}</span>
         <input type="file" accept="image/*" data-proofline="${s.line}"></label>`).join("")}`;
   };
+  const cutOnly = () => form.mode.value === "cut";
+  form.mode.onchange = () => {
+    const cut = cutOnly(), show = (el, on) => { if (el) el.style.display = on ? "" : "none"; };
+    show(form.captions.closest("label"), !cut);
+    [form.caption_style, form.crop_mode, form.hook_text, form.sales_script, form.aspect, form.look, form.fps, form.write_copy]
+      .forEach(el => show(el && el.closest("label"), !cut));
+  };
   const isPhotos = () => [...form.files.files].some(f => f.type.startsWith("image/"));
-  form.files.onchange = () => { $("#edphotos", v).hidden = !isPhotos(); $("#edvideo", v).hidden = isPhotos(); };
+  form.files.onchange = () => { $("#edphotos", v).hidden = !isPhotos(); $("#edvideo", v).hidden = isPhotos(); $("#edmode", v).hidden = isPhotos(); };
   v.querySelectorAll("[data-retry]").forEach(b => b.onclick = () => api(`/api/edits/${b.dataset.retry}/retry`, {}).then(load));
   form.onsubmit = async e => {
     e.preventDefault();
@@ -832,7 +848,8 @@ async function renderEdit(v) {
         pingpong: f.pingpong.checked, fit: f.fit.value}
       : {pace: f.pace.value, caption_style: f.caption_style.value, crop_mode: f.crop_mode.value, write_copy: f.write_copy.checked,
          stopmotion: f.look.value ? {look: f.look.value, fps: Number(f.fps.value)} : null};
-    Object.assign(options, {hook_text: f.hook_text.value, title: f.title.value, caption: f.caption.value});
+    Object.assign(options, {hook_text: f.hook_text.value, title: f.title.value, caption: f.caption.value,
+      cut_only: !photos && cutOnly(), captions: f.captions.value === "on"});
     if (!photos) { options.aspect = f.aspect.value; if (f.sales_script.value) options.sales = {script_id: Number(f.sales_script.value)}; }
     const fd = new FormData();
     const proofLines = [];
