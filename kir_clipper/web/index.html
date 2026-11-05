@@ -229,7 +229,8 @@ function editLine(e) {
     cards.some(x => !x.placed) ? ` (not found in what you said: ${cards.filter(x => !x.placed).map(x => `"${esc(x.text.slice(0, 40))}..."`).join(", ")})` : ""}</div>` : "";
   const names = {silence: "pause", filler: "um", retake: "retake"};
   const cuts = Object.entries(e.cuts || {}).map(([k, n]) => `${n} ${names[k] || k}${n > 1 ? "s" : ""}`).join(", ");
-  const extra = (e.behind ? (e.behind.placed ? ` · "${esc(e.behind.word)}" behind your head` : ` · word behind head skipped: ${esc(e.behind.reason)}`) : "")
+  const lay = e.layout ? (e.layout.stacked ? ` · two people stacked (${e.layout.top} side on top)` : ` · not stacked: ${esc(e.layout.reason)}`) : "";
+  const extra = lay + (e.behind ? (e.behind.placed ? ` · "${esc(e.behind.word)}" behind your head` : ` · word behind head skipped: ${esc(e.behind.reason)}`) : "")
     + (e.sfx && e.sfx.count ? ` · ${e.sfx.count} sound effect${e.sfx.count > 1 ? "s" : ""}` : "");
   return cardLine + `<div class="muted">${e.removed ? `Tightened ${e.duration_in}s → ${e.duration_out}s (${cuts})` : "No jump cuts"}${
     e.lufs != null ? ` · audio ${e.lufs} LUFS` : ""}${extra}${e.audio_note ? ` <span title="${esc(e.audio_note)}">ⓘ</span>` : ""}</div>`;
@@ -247,7 +248,7 @@ function cutList(c) {
     ${kept.map(t => row(Number(t), null, "kept by you", "", false)).join("")}</details>`;
 }
 function clipCard(c) {
-  const styles = ["hormozi","bold_pop","karaoke","boxed","minimal"], crops = ["face","center","blur_pad"], zooms = ["none","punch","slow_push"];
+  const styles = ["hormozi","bold_pop","karaoke","boxed","minimal"], crops = ["face","center","blur_pad","split"], zooms = ["none","punch","slow_push"];
   const r = c.recipe || {};
   const sel = (name, opts, v) => `<select data-r="${name}">${opts.map(o => `<option ${o===v?"selected":""}>${o}</option>`).join("")}</select>`;
   const posts = c.posts.map(p => `${p.platform}: ${p.status} ${when(p.publish_at)}${p.last_error?` (${esc(p.last_error)})`:""}`).join("<br>");
@@ -263,6 +264,7 @@ function clipCard(c) {
         <span class="muted">clip ${c.id}${c.version>1?` · re-edit v${c.version} of ${c.parent_clip_id}`:""} · ${c.duration}s · ${c.status}${c.note?` · ${esc(c.note)}`:""}</span></div>
       <div><b>Hook:</b> ${esc(c.hook)}</div>
       ${c.checks ? hookBadge(c.checks.hook, "On-screen hook A") + hookBadge(c.checks.hook_alt, "Hook B") + copyReport(c.checks.copy) + editLine(c.checks.edit) : ""}
+      ${c.checks && c.checks.edit && c.checks.edit.layout && c.checks.edit.layout.stacked && !r.imported ? `<div class="row"><button class="btn plain" data-a="swap">Swap top/bottom</button></div>` : ""}
       <div class="muted">${esc(c.reason)}</div>
       ${c.suggested_time ? `<div class="muted">Next free slot: ${when(c.suggested_time)}</div>` : ""}
       ${c.timeline && c.timeline.length ? planList(c.timeline) : posts ? `<div class="muted">${posts}</div>` : ""}
@@ -291,6 +293,8 @@ function clipCard(c) {
         <div class="row"><label>Word behind my head<select data-r="behind_word"><option value="false">off</option>
             <option value="true" ${r.behind_word ? "selected" : ""}>on</option></select></label>
           <label>Which word (blank = automatic)<input data-r="behind_text" value="${esc(r.behind_text || "")}"></label></div>
+        <div class="row"><label title="When you and a guest are both on screen, the clip is stacked: them on top, you below">Two people<select data-r="split_swap">
+            <option value="false">guest on top, me below</option><option value="true" ${r.split_swap ? "selected" : ""}>swapped</option></select></label></div>
         ${cutList(c)}
         <div class="row"><label>Start (s)<input data-b="start" value="${c.start}"></label><label>End (s)<input data-b="end" value="${c.end}"></label>
           <label>Hook overlay<input data-r="hook_text" value="${esc(r.hook_text)}"></label></div>
@@ -341,6 +345,10 @@ function wire() {
         if (a === "approve") { await api(`/api/clips/${id}/edit`, collect(card)); await api(`/api/clips/${id}/approve`, {}); toast("Approved and scheduled. See its posting plan under Scheduled."); }
         if (a === "reject") { await api(`/api/clips/${id}/reject`, {}); toast("Clip rejected"); }
         if (a === "save") { await api(`/api/clips/${id}/edit`, collect(card)); toast("Saved"); }
+        if (a === "swap") {
+          b.textContent = "Rendering..."; await api(`/api/clips/${id}/edit`, {recipe: {split_swap: $("[data-r=split_swap]", card).value !== "true"}});
+          toast("Swapped. Re-rendering..."); load(); return;
+        }
         if (a === "render") {
           const recipe = {}; card.querySelectorAll("[data-r]").forEach(el => recipe[el.dataset.r] = el.value);
           const look = $("[data-sm=look]", card).value;
@@ -348,6 +356,7 @@ function wire() {
           recipe.jumpcut_keep = [...card.querySelectorAll("[data-cut]")].filter(x => !x.checked).map(x => Number(x.dataset.cut));
           recipe.caption_size = Number(recipe.caption_size || 1); recipe.caption_y = recipe.caption_y ? Number(recipe.caption_y) : null;
           recipe.behind_word = recipe.behind_word === "true";
+          recipe.split_swap = recipe.split_swap === "true";
           const body = {...collect(card), recipe}; card.querySelectorAll("[data-b]").forEach(el => body[el.dataset.b] = el.value);
           b.textContent = "Rendering..."; await api(`/api/clips/${id}/edit`, body);
         }

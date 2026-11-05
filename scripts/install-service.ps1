@@ -18,5 +18,6 @@ $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings `
     -Principal $Principal -Description "KIR Auto-Clipper: watches the stream folder, renders and schedules clips." -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
-Write-Host "Installed and started '$TaskName'. Dashboard: http://127.0.0.1:8765" -ForegroundColor Green
+$Url = (& (Join-Path $Repo ".venv\Scripts\python.exe") -m kir_clipper open --print)
+Write-Host "Installed and started '$TaskName'. Dashboard: $Url" -ForegroundColor Green
 Write-Host "Logs: <data folder>\logs\kir_clipper.log   (data folder is set in config.yaml, default ~\Streams\kir-data)"
