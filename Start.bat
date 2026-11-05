@@ -7,6 +7,7 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-start "" "http://127.0.0.1:8765"
+rem Opens the dashboard at the port in your settings once the app is up.
+start "" /b ".venv\Scripts\python.exe" -m kir_clipper open --wait 60
 ".venv\Scripts\python.exe" -m kir_clipper run
 pause

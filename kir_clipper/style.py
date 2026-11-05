@@ -21,7 +21,7 @@ from .config import Config
 PACES = ("tight", "normal", "loose", "off")
 SFX_LEVELS = ("off", "light", "medium", "full")
 ZOOMS = ("none", "punch", "slow_push")
-CROPS = ("face", "center", "blur_pad")
+CROPS = ("face", "center", "blur_pad", "split")
 FONTS = ("Montserrat Black", "Anton", "Arial", "Impact")
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 

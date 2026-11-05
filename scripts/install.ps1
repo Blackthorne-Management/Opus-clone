@@ -143,11 +143,11 @@ if (-not $Quiet) {
     Write-Host ""
     if (Ask "Start the clipper now, and automatically every time you log in?") {
         & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "install-service.ps1")
-        Start-Sleep -Seconds 4
-        Start-Process "http://127.0.0.1:8765/#settings"
+        & $Py -m kir_clipper open --path settings --wait 60 | Out-Null
         Write-Host "The dashboard is open in your browser. Fill in Settings -> Make it yours first." -ForegroundColor Green
     } else {
-        Write-Host "To start it later: double-click Start.bat, then open http://127.0.0.1:8765" -ForegroundColor Green
+        $Url = (& $Py -m kir_clipper open --print)
+        Write-Host "To start it later: double-click Start.bat, then open $Url" -ForegroundColor Green
     }
     Read-Host "Setup finished. Press Enter to close"
 }

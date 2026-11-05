@@ -24,7 +24,7 @@ from .stopmotion import video_filter as stopmotion_filter
 
 log = logging.getLogger("kir.render")
 
-CROP_MODES = ("face", "center", "blur_pad")
+CROP_MODES = ("face", "center", "blur_pad", "split")
 ZOOM_MODES = ("none", "punch", "slow_push")
 
 
@@ -66,6 +66,8 @@ def default_recipe(cfg: Config, clip: dict, use_style: bool = True) -> dict:
         "behind_text": "",
         # Sound effects under your voice (sfx.py): off | light | medium | full
         "sfx": cfg.get("sfx.default", "light"),
+        # Two people on screen are stacked automatically (render.detect_people); this puts the other one on top
+        "split_swap": False,
     }
     if use_style:
         from .style import apply
@@ -129,15 +131,96 @@ def _detect_face_center(source: Path, start: float, end: float, samples: int) ->
     return float(statistics.median(xs))
 
 
+def detect_people(source: Path, start: float, end: float, samples: int = 12) -> list[dict] | None:
+    """Two people side by side (a guest and you on stream): their face centres and sizes, left one first, as shares
+    of the frame ({"x", "y", "h"}). None unless two clearly separate faces show up in at least half the samples."""
+    try:
+        return _detect_people(source, start, end, samples)
+    except Exception as exc:
+        log.info("Two-person check skipped (%s: %s)", type(exc).__name__, exc)
+        return None
+
+
+def _detect_people(source: Path, start: float, end: float, samples: int) -> list[dict] | None:
+    try:
+        import cv2  # optional dependency
+    except ImportError:
+        return None
+    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    cap = cv2.VideoCapture(str(source))
+    left, right = [], []
+    try:
+        for k in range(samples):
+            cap.set(cv2.CAP_PROP_POS_MSEC, (start + (end - start) * (k + 0.5) / samples) * 1000)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            h, w = frame.shape[:2]
+            if h > w:                                   # already vertical: nothing to stack
+                return None
+            scale = 640 / w
+            gray = cv2.cvtColor(cv2.resize(frame, (640, int(h * scale))), cv2.COLOR_BGR2GRAY)
+            faces = sorted(cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=6, minSize=(36, 36)),
+                           key=lambda f: -f[2] * f[3])[:2]
+            if len(faces) < 2:
+                continue
+            a, b = sorted(faces, key=lambda f: f[0])
+            if min(a[3], b[3]) < 0.4 * max(a[3], b[3]):      # a small face in a poster or on a phone isn't a person
+                continue
+            ax, bx = (a[0] + a[2] / 2) / 640, (b[0] + b[2] / 2) / 640
+            if bx - ax < 0.25:
+                continue
+            gh = gray.shape[0]
+            left.append((ax, (a[1] + a[3] / 2) / gh, a[3] / gh))
+            right.append((bx, (b[1] + b[3] / 2) / gh, b[3] / gh))
+    finally:
+        cap.release()
+    if len(left) < max(3, samples // 2):
+        return None
+    med = lambda rows, i: float(statistics.median(r[i] for r in rows))
+    return [{"x": med(rows, 0), "y": med(rows, 1), "h": med(rows, 2)} for rows in (left, right)]
+
+
+def split_panels(people: list[dict], me_side: str = "left", swap: bool = False) -> tuple[dict, dict, str]:
+    """(top, bottom, which side is on top): the person you're talking to on top, you underneath."""
+    left, right = people
+    top, bottom, top_side = (right, left, "right") if me_side == "left" else (left, right, "left")
+    if swap:
+        top, bottom, top_side = bottom, top, ("left" if top_side == "right" else "right")
+    return top, bottom, top_side
+
+
+def _panel_crop(p: dict, src_w: int, src_h: int, ratio: float) -> tuple[int, int, int, int]:
+    """Crop (w, h, x, y) around one person for a panel of width/height `ratio`, their face a little above centre."""
+    cw = int(min(src_w * 0.5, src_h * ratio)) // 2 * 2
+    ch = int(cw / ratio) // 2 * 2
+    if ch > src_h:
+        ch = src_h // 2 * 2
+        cw = int(ch * ratio) // 2 * 2
+    x = int(min(max(p["x"] * src_w - cw / 2, 0), src_w - cw))
+    y = int(min(max(p["y"] * src_h - 0.42 * ch, 0), src_h - ch))
+    return cw, ch, x, y
+
+
 def build_filtergraph(info: dict, recipe: dict, out_w: int, out_h: int, fps: int, face_x: float | None,
                       has_logo: bool, ass_name: str, fonts_dir: Path | None, src: str = "0:v",
-                      cards: list[tuple[int, float, float]] | None = None) -> str:
+                      cards: list[tuple[int, float, float]] | None = None,
+                      split: tuple[dict, dict] | None = None) -> str:
     """`src` is the input video label: "0:v", or the output of the jump-cut chain. `cards` are full-screen proof
     images as (input index, start, end) on the output timeline (sales videos)."""
     src_w, src_h = info["width"], info["height"]
     mode = recipe.get("crop_mode", "center")
     chains = []
-    if mode == "blur_pad":
+    if split:
+        panel_h = out_h // 2 // 2 * 2
+        ratio = out_w / panel_h
+        parts = []
+        for name, person in (("top", split[0]), ("bot", split[1])):
+            cw, ch, x, y = _panel_crop(person, src_w, src_h, ratio)
+            parts.append(f"[s{name}]crop={cw}:{ch}:{x}:{y},scale={out_w}:{panel_h}:flags=lanczos,setsar=1[{name}]")
+        pad = f",pad={out_w}:{out_h}:0:0" if panel_h * 2 != out_h else ""
+        chains.append(f"[{src}]split=2[stop][sbot];" + ";".join(parts) + f";[top][bot]vstack=inputs=2{pad}[base]")
+    elif mode == "blur_pad":
         chains.append(
             f"[{src}]split=2[bgsrc][fgsrc];"
             f"[bgsrc]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},boxblur=24:2,"
@@ -232,7 +315,18 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
         out_duration = duration
 
     face_x = None
-    if recipe.get("crop_mode") == "face":
+    split = None
+    mode = recipe.get("crop_mode")
+    stacked_report = None
+    if mode == "split" or (mode == "face" and cfg.get("split.auto", True) and (recipe.get("aspect") or "9:16") == "9:16"):
+        people = detect_people(source, start, end)
+        if people:
+            top, bottom, top_side = split_panels(people, cfg.get("split.me_side", "left"), bool(recipe.get("split_swap")))
+            split = (top, bottom)
+            stacked_report = {"stacked": True, "top": top_side}
+        elif mode == "split":
+            stacked_report = {"stacked": False, "reason": "only one person found in this clip"}
+    if mode in ("face", "split") and split is None:
         face_x = detect_face_center(source, start, end)
         if face_x is None:
             log.info("No reliable face found; using center crop")
@@ -245,6 +339,8 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
     encoder = media.pick_encoder(r.get("encoder", "auto"))
     report = {"duration_in": round(duration, 2), "duration_out": round(out_duration, 2),
               "jumpcut": None, "audio": None}
+    if stacked_report:
+        report["layout"] = stacked_report
     placed = []
     if recipe.get("proof_cards"):
         report["proof_cards"] = []
@@ -258,8 +354,17 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
                 placed.append((image, span[0], min(out_duration, span[1])))
     # The hook word behind your head (depth.py): pick it now so captions and sound effects can follow it.
     look = dict(recipe)
+    if split:
+        # Two people stacked: captions sit on the line between you, no zooms (they'd cut into both faces), and
+        # no word behind a head (there's no room above either of you).
+        if look.get("caption_y") is None:
+            look["caption_y"] = float(cfg.get("split.caption_y", 0.535))
+        look["zoom"] = "none"
+        if look.get("behind_word"):
+            look["behind_word"] = False
+            report["behind"] = {"placed": False, "word": "", "reason": "not used when two people are stacked"}
     behind = None
-    if recipe.get("behind_word") and words:
+    if look.get("behind_word") and words:
         from .depth import pick_word
         behind = pick_word(words, recipe.get("behind_text") or "")
         if behind is None:
@@ -285,8 +390,8 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
             pre.append(jumpcut.video_chain(cuts["frames"], fps, "0:v", "cut"))
             src = "cut"
         first_card = 2 if has_logo else 1
-        graph = build_filtergraph(info, recipe, out_w, out_h, fps, face_x, has_logo, "captions.ass", fonts_dir, src,
-                                  [(first_card + k, s, e) for k, (_, s, e) in enumerate(placed)])
+        graph = build_filtergraph(info, look, out_w, out_h, fps, face_x, has_logo, "captions.ass", fonts_dir, src,
+                                  [(first_card + k, s, e) for k, (_, s, e) in enumerate(placed)], split)
         if has_audio:
             pre.append(jumpcut.audio_chain(cuts["keeps"], settings["crossfade_ms"]) if cuts else "[0:a:0]anull[acut]")
             if sfx_track:                      # effects under the voice, before mastering sets the level

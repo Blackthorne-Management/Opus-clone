@@ -104,6 +104,27 @@ def cmd_doctor(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_open(args) -> int:
+    """Open the dashboard in the browser at the port in your settings (waiting for it to start with --wait)."""
+    import socket
+    import time
+    import webbrowser
+    cfg, _ = _ctx(args)
+    _, port = dashboard_bind(cfg)
+    url = f"http://127.0.0.1:{port}/" + (f"#{args.path}" if args.path else "")
+    print(url)
+    if args.print_only:
+        return 0
+    for _ in range(int(args.wait * 2) if args.wait else 0):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.5)
+    webbrowser.open(url)
+    return 0
+
+
 def cmd_process(args) -> int:
     from .pipeline import process_file
     cfg, conn = _ctx(args)
@@ -444,6 +465,11 @@ def main(argv: list[str] | None = None) -> int:
     s.set_defaults(fn=cmd_run)
 
     sub.add_parser("doctor", help="check the setup").set_defaults(fn=cmd_doctor)
+    s = sub.add_parser("open", help="open the dashboard in the browser (at the port in your settings)")
+    s.add_argument("--path", default="", help="a tab, e.g. settings")
+    s.add_argument("--wait", type=float, default=0, help="wait up to this many seconds for the app to start")
+    s.add_argument("--print", dest="print_only", action="store_true", help="only print the address")
+    s.set_defaults(fn=cmd_open)
     s = sub.add_parser("process", help="process one recording now")
     s.add_argument("file")
     s.add_argument("--dry-run", action="store_true")
