@@ -68,6 +68,8 @@ def default_recipe(cfg: Config, clip: dict, use_style: bool = True) -> dict:
         "sfx": cfg.get("sfx.default", "light"),
         # Two people on screen are stacked automatically (render.detect_people); this puts the other one on top
         "split_swap": False,
+        # Word-by-word captions on the video (off = no captions burned in; the .srt file is still made)
+        "captions": True,
     }
     if use_style:
         from .style import apply
@@ -292,6 +294,8 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
     out_w, out_h = int(r.get("width", 1080)), int(r.get("height", 1920))
     if recipe.get("aspect") == "16:9":           # landscape (sales videos for a web page)
         out_w, out_h = max(out_w, out_h), min(out_w, out_h)
+    elif recipe.get("aspect") == "original" and info["width"] and info["height"]:
+        out_w, out_h = info["width"] // 2 * 2, info["height"] // 2 * 2     # same size and shape as what you filmed
     fps = int(r.get("fps", 30))
     start = float(clip["start"]) + float(recipe.get("trim_start", 0.0))
     end = float(clip["end"]) - float(recipe.get("trim_end", 0.0))
@@ -377,7 +381,8 @@ def render_clip(cfg: Config, source: Path, clip: dict, words: list[dict], recipe
     with tempfile.TemporaryDirectory(prefix="kir_render_") as tmp:
         tmpdir = Path(tmp)
         # ffmpeg runs with cwd=tmpdir so the subtitle file can be referenced by bare name.
-        (tmpdir / "captions.ass").write_text(build_ass(words, out_duration, look, brand, out_w, out_h), encoding="utf-8")
+        (tmpdir / "captions.ass").write_text(build_ass(words if look.get("captions", True) else [],
+                                                            out_duration, look, brand, out_w, out_h), encoding="utf-8")
         sfx_track = None
         if has_audio:
             from . import sfx

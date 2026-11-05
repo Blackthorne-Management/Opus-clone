@@ -49,14 +49,29 @@ def probe(path: Path) -> dict:
     if video and video.get("avg_frame_rate", "0/0") != "0/0":
         num, den = video["avg_frame_rate"].split("/")
         fps = float(num) / float(den) if float(den) else 30.0
+    width, height = (int(video["width"]), int(video["height"])) if video else (0, 0)
+    if video and abs(_rotation(video)) % 180 == 90:
+        width, height = height, width          # phone videos stored sideways; ffmpeg turns them upright when decoding
     return {
         "duration": float(data.get("format", {}).get("duration") or 0.0),
-        "width": int(video["width"]) if video else 0,
-        "height": int(video["height"]) if video else 0,
+        "width": width,
+        "height": height,
         "fps": fps,
         "has_audio": audio is not None,
         "format": data.get("format", {}).get("format_name", ""),
     }
+
+
+def _rotation(video: dict) -> int:
+    try:
+        if "rotate" in (video.get("tags") or {}):
+            return int(float(video["tags"]["rotate"]))
+        for side in video.get("side_data_list") or []:
+            if "rotation" in side:
+                return int(float(side["rotation"]))
+    except (TypeError, ValueError):
+        pass
+    return 0
 
 
 def fast_hash(path: Path, sample_bytes: int = 8 * 1024 * 1024) -> str:
