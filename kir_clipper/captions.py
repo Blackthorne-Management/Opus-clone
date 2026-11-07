@@ -1,7 +1,11 @@
 """Animated word-by-word captions as an ASS subtitle file, burned in by ffmpeg/libass.
 
-Every style shows a short phrase and animates the word currently being spoken. Styles differ
-enough that a re-edit with a different style looks clearly different.
+Phrasing follows the caption rules of the master-skills /edit skill (Jake Schincariol, MIT): 1-3 word
+phrases that break after . ! ?, after a comma once a phrase has 2 words, on pauses of 0.3 s or more and at a
+character limit; a phrase never ends on a weak opener ("the", "to", "a"), a phrase too quick to read grows by a
+word, ums are hidden, and each phrase stays up until the next one starts (or a quarter second after a real
+pause). The spoken word changes colour only, never size, so the line never shifts while you talk, and every
+phrase is sized to fit on one line.
 """
 
 from __future__ import annotations
@@ -13,8 +17,17 @@ CAPTION_STYLES = ("hormozi", "bold_pop", "karaoke", "boxed", "minimal")
 # Show each phrase a hair before it is spoken: reading takes a moment, so captions that land
 # exactly on the audio feel late.
 CAPTION_LEAD = 0.04
-# A pause shorter than this keeps the previous phrase on screen (no flicker between phrases).
-HOLD_GAP = 0.6
+# A pause up to this keeps the previous phrase on screen (no flicker between phrases).
+HOLD_GAP = 0.5
+# A phrase stays up at least this long, so it can be read.
+MIN_PHRASE = 0.4
+FILLERS = {"um", "umm", "ummm", "uh", "uhh", "uhm", "er", "erm", "ah", "ahh", "hmm", "hm", "mm", "mmm"}
+# Words that open a phrase: a full phrase shouldn't end on one when the sentence carries on.
+WEAK_ENDINGS = {"a", "an", "the", "to", "of", "and", "or", "but", "for", "in", "on", "at", "with", "from", "by",
+                "into", "my", "your", "our", "their", "his", "her", "its", "if", "as", "is", "are", "was", "were",
+                "will", "can"}
+# Average width of a heavy uppercase letter as a share of the font size (Montserrat Black measured at ~0.62-0.68).
+CHAR_W = 0.68
 
 _EMPHASIS = set("""MONEY MILLION MILLIONS BILLION BILLIONS THOUSAND RICH BROKE WEALTH DEBT NEVER ALWAYS FREE SECRET
 STOP MISTAKE MISTAKES WRONG BEST WORST FAST EASY HARD WIN LOSE QUIT FAIL FAILED FAILURE SUCCESS DISCIPLINE
@@ -46,19 +59,52 @@ def _ts(t: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def group_words(words: list[dict], max_words: int, max_gap: float = 0.45, max_chars: int = 0) -> list[list[dict]]:
-    groups: list[list[dict]] = []
-    cur: list[dict] = []
-    for w in words:
-        too_long = max_chars and sum(len(x["w"]) + 1 for x in cur) + len(w["w"]) > max_chars
-        if cur and (len(cur) >= max_words or too_long or w["s"] - cur[-1]["e"] > max_gap
-                    or cur[-1]["w"][-1:] in ".!?,"):
-            groups.append(cur)
-            cur = []
-        cur.append(w)
+def _norm(text: str) -> str:
+    return re.sub(r"[^\w']+", "", text.lower()).strip("'")
+
+
+def phrases(words: list[dict], max_words: int = 3, max_chars: int = 18, pause: float = 0.3,
+            min_dur: float = MIN_PHRASE) -> list[dict]:
+    """Caption phrases [{"start", "end", "words"}] from word timings ({"w", "s", "e"}). Ums are left out."""
+    words = [w for w in words if _norm(w["w"]) not in FILLERS and _norm(w["w"])]
+    chunks, cur = [], []
+    for i, word in enumerate(words):
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        cur.append(word)
+        text_len = len(" ".join(w["w"] for w in cur))
+        hard = word["w"][-1:] in ".!?" or nxt is None or nxt["s"] - word["e"] >= pause
+        soft = word["w"][-1:] in ",;:" and len(cur) >= 2
+        nxt_len = text_len + 1 + len(nxt["w"]) if nxt else 0
+        full = len(cur) >= max_words or (nxt is not None and nxt_len > max_chars)
+        if not (hard or soft or full):
+            continue
+        if (not hard and len(cur) < max_words and nxt is not None and nxt_len <= max_chars + 4
+                and nxt["e"] - cur[0]["s"] < 1.2 and word["e"] - cur[0]["s"] < min_dur):
+            continue                                   # too quick to read: let it grow by one word
+        if full and not hard and len(cur) >= 2 and _norm(word["w"]) in WEAK_ENDINGS:
+            carry = cur.pop()                          # "...to" moves to the next phrase
+            chunks.append(cur)
+            cur = [carry]
+            continue
+        chunks.append(cur)
+        cur = []
     if cur:
-        groups.append(cur)
-    return groups
+        chunks.append(cur)
+    out = []
+    for i, group in enumerate(chunks):
+        start, end = group[0]["s"], group[-1]["e"]
+        if i + 1 < len(chunks):
+            nxt_start = chunks[i + 1][0]["s"]
+            end = nxt_start if nxt_start - end <= HOLD_GAP else end + 0.25
+            end = min(max(end, start + min_dur), nxt_start)
+        else:
+            end = max(end + 0.25, start + min_dur)
+        out.append({"start": start, "end": end, "words": group})
+    return out
+
+
+def group_words(words: list[dict], max_words: int, max_gap: float = 0.3, max_chars: int = 18) -> list[list[dict]]:
+    return [p["words"] for p in phrases(words, max_words, max_chars or 18, max_gap)]
 
 
 def is_emphasis(word: str) -> bool:
@@ -72,11 +118,11 @@ def _hormozi_text(word: str) -> str:
 
 STYLE_PARAMS = {
     #             words, size (at 1920 tall), uppercase, border_style, outline, shadow
-    "hormozi":  dict(words=3, size=150, upper=True, border=1, outline=12, shadow=5, chars=13),
-    "bold_pop": dict(words=3, size=96, upper=True, border=1, outline=7, shadow=3),
-    "karaoke":  dict(words=6, size=74, upper=False, border=1, outline=5, shadow=2),
-    "boxed":    dict(words=4, size=78, upper=True, border=3, outline=14, shadow=0),
-    "minimal":  dict(words=7, size=64, upper=False, border=1, outline=3, shadow=1),
+    "hormozi":  dict(words=3, size=112, upper=True, border=1, outline=10, shadow=4, chars=16),
+    "bold_pop": dict(words=3, size=92, upper=True, border=1, outline=7, shadow=3, chars=18),
+    "karaoke":  dict(words=6, size=74, upper=False, border=1, outline=5, shadow=2, chars=32),
+    "boxed":    dict(words=3, size=78, upper=True, border=3, outline=14, shadow=0, chars=18),
+    "minimal":  dict(words=6, size=64, upper=False, border=1, outline=3, shadow=1, chars=34),
 }
 
 
@@ -116,7 +162,7 @@ def build_ass(words: list[dict], duration: float, recipe: dict, brand: dict, wid
 ScriptType: v4.00+
 PlayResX: {width}
 PlayResY: {height}
-WrapStyle: 0
+WrapStyle: {2 if style_name in ("hormozi", "bold_pop", "boxed") else 0}
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
@@ -133,43 +179,49 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     base = _inline_color(primary)
 
     lead = float(recipe.get("caption_lead", CAPTION_LEAD))
-    groups = group_words(words, p["words"], 0.35 if style_name == "hormozi" else 0.45, p.get("chars", 0))
-    if style_name == "hormozi":
-        events.extend(_hormozi_events(groups, lead, hl, base, _inline_color(brand.get("emphasis_color", "#2BFF4A")),
-                                      size, p["chars"]))
-        groups = []
-    for group in groups:
-        g_start, g_end = group[0]["s"], group[-1]["e"]
-        texts = [_esc(w["w"].upper() if p["upper"] else w["w"]) for w in group]
+    emph = _inline_color(brand.get("emphasis_color", "#2BFF4A"))
+    avail = width - 2 * round(70 * k)                 # the line must fit between the side margins
+    one_line = style_name in ("hormozi", "bold_pop", "boxed")
+    for cue in phrases(words, p["words"], p["chars"]):
+        group = cue["words"]
+        upper = p["upper"]
+        texts = [(_hormozi_text(w["w"]) if style_name == "hormozi" else _esc(w["w"].upper() if upper else w["w"]))
+                 for w in group]
+        c_start, c_end = cue["start"] - lead, cue["end"] - lead
+        # Too wide for one line: shrink this phrase (all of its words alike, so nothing jumps mid-phrase).
+        est = CHAR_W * size * len(" ".join(texts))
+        fit = f"\\fs{max(12, int(size * avail / est))}" if one_line and est > avail else ""
         if style_name == "karaoke":
             # One event per phrase; \kf sweeps the highlight colour across each word as it is spoken.
-            parts = []
-            cursor = g_start
+            parts, cursor = [], cue["start"]
             for w, t in zip(group, texts):
-                lead = max(0, int(round((w["s"] - cursor) * 100)))
+                gap = max(0, int(round((w["s"] - cursor) * 100)))
                 dur = max(1, int(round((w["e"] - w["s"]) * 100)))
-                if lead:
-                    parts.append(f"{{\\k{lead}}}")
+                if gap:
+                    parts.append(f"{{\\k{gap}}}")
                 parts.append(f"{{\\kf{dur}}}{t} ")
                 cursor = w["e"]
-            # \kf fills from SecondaryColour to PrimaryColour, so swap them: spoken words turn highlight.
-            swap = f"\\1c{hl}\\2c{base}"
-            events.append(f"Dialogue: 0,{_ts(g_start)},{_ts(g_end + 0.15)},Cap,,0,0,0,,{{\\fad(80,80){swap}}}{''.join(parts).strip()}")
+            swap = f"\\1c{hl}\\2c{base}"         # \kf fills Secondary -> Primary, so spoken words turn highlight
+            events.append(f"Dialogue: 0,{_ts(c_start)},{_ts(c_end)},Cap,,0,0,0,,{{\\fad(60,60){swap}}}{''.join(parts).strip()}")
             continue
         if style_name == "minimal":
-            events.append(f"Dialogue: 0,{_ts(g_start)},{_ts(g_end + 0.1)},Cap,,0,0,0,,{{\\fad(120,80)}}{' '.join(texts)}")
+            events.append(f"Dialogue: 0,{_ts(c_start)},{_ts(c_end)},Cap,,0,0,0,,{{\\fad(80,60)}}{' '.join(texts)}")
             continue
-        # bold_pop / boxed: one event per word, whole phrase shown, active word coloured (and popped).
+        # hormozi / bold_pop / boxed: the whole phrase shows; the spoken word changes colour (never size).
         for i, w in enumerate(group):
-            w_end = group[i + 1]["s"] if i + 1 < len(group) else g_end + 0.1
+            start = c_start if i == 0 else w["s"] - lead
+            end = c_end if i == len(group) - 1 else group[i + 1]["s"] - lead
+            if end - start < 0.02:
+                continue
             pieces = []
             for j, t in enumerate(texts):
-                if j == i:
-                    pop = "\\fscx118\\fscy118\\t(0,90,\\fscx100\\fscy100)" if style_name == "bold_pop" else ""
-                    pieces.append(f"{{\\1c{hl}{pop}}}{t}{{\\1c{base}\\fscx100\\fscy100}}")
-                else:
-                    pieces.append(t)
-            events.append(f"Dialogue: 0,{_ts(w['s'])},{_ts(w_end)},Cap,,0,0,0,,{' '.join(pieces)}")
+                colour = emph if (style_name == "hormozi" and is_emphasis(group[j]["w"])) else (hl if j == i else base)
+                pieces.append(f"{{\\1c{colour}}}{t}{{\\1c{base}}}")
+            # The phrase settles in once when it appears (the whole line together), then holds still.
+            intro = ("\\fscx94\\fscy94\\t(0,90,\\fscx100\\fscy100)" if i == 0 and style_name in ("hormozi", "bold_pop")
+                     else "")
+            tags = f"{{{fit}{intro}}}" if (fit or intro) else ""
+            events.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{tags}{' '.join(pieces)}")
 
     hook = (recipe.get("hook_text") or "").strip()
     if recipe.get("hook_overlay") and hook:
@@ -179,36 +231,3 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         events.append(f"Dialogue: 1,{_ts(duration - 2.6)},{_ts(duration)},Cta,,0,0,0,,{{\\fad(200,0)}}{_esc(cta)}")
     return header + "\n".join(events) + "\n"
 
-
-def _hormozi_events(groups: list[list[dict]], lead: float, hl: str, base: str, emph: str,
-                    size: int, max_chars: int) -> list[str]:
-    """Hormozi style: 1-3 huge uppercase words, the phrase pops in, the spoken word turns yellow and
-    grows, money/numbers/power words stay green. Each phrase is held until the next one starts
-    (unless there is a real pause) so the screen never flickers between phrases."""
-    events = []
-    for gi, group in enumerate(groups):
-        nxt = groups[gi + 1][0]["s"] if gi + 1 < len(groups) else None
-        g_end = group[-1]["e"] + 0.15
-        if nxt is not None and nxt - group[-1]["e"] < HOLD_GAP:
-            g_end = nxt
-        texts = [_hormozi_text(w["w"]) for w in group]
-        # One line, always: a phrase that is still too wide (one long word) is shrunk to fit.
-        n_chars = len(" ".join(texts))
-        fit = f"\\fs{round(size * max_chars / n_chars)}" if n_chars > max_chars else ""
-        for i, w in enumerate(group):
-            start = w["s"] - lead
-            end = (group[i + 1]["s"] if i + 1 < len(group) else g_end) - lead
-            if end - start < 0.04:
-                continue
-            pieces = []
-            for j, t in enumerate(texts):
-                colour = emph if is_emphasis(group[j]["w"]) else (hl if j == i else base)
-                if j == i and i > 0:  # active word pops; the first word rides the phrase pop-in instead
-                    pieces.append(f"{{\\1c{colour}\\fscx122\\fscy122\\t(0,110,\\fscx108\\fscy108)}}{t}"
-                                  f"{{\\1c{base}\\fscx100\\fscy100}}")
-                else:
-                    pieces.append(f"{{\\1c{colour}}}{t}{{\\1c{base}}}")
-            intro = "{\\fscx70\\fscy70\\t(0,70,\\fscx108\\fscy108)\\t(70,140,\\fscx100\\fscy100)}" if i == 0 else ""
-            events.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{{{fit}}}{intro}{' '.join(pieces)}"
-                          if fit else f"Dialogue: 0,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{intro}{' '.join(pieces)}")
-    return events
