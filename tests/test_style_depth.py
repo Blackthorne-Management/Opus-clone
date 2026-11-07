@@ -65,7 +65,7 @@ def test_caption_settings_reach_the_subtitles():
     tuned = build_ass(words, 2.0, {"caption_style": "bold_pop", "caption_size": 1.5, "caption_y": 0.5,
                                    "caption_font": "Anton", "primary_color": "#112233"}, {"font": "Montserrat Black"}, 1080, 1920)
     cap = lambda ass: next(l for l in ass.splitlines() if l.startswith("Style: Cap,")).split(",")
-    assert int(cap(base)[2]) == 96 and int(cap(tuned)[2]) == 144
+    assert int(cap(base)[2]) == 92 and int(cap(tuned)[2]) == 138
     assert cap(tuned)[1] == "Anton" and cap(tuned)[3] == "&H00332211"
     assert int(cap(tuned)[21]) == 960                                   # bottom of the captions halfway down
 

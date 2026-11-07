@@ -362,6 +362,14 @@ These come from Jake Schincariol's free [master-skills](https://github.com/Jakes
 pack (MIT): the `/edit` and `/virality` skills, rebuilt as parts of this app. Where the skill did something
 better than the clipper did, the skill's way replaced it.
 
+### Captions that hold still
+
+Captions follow the caption rules of the master-skills `/edit` skill. Captions are 1-3 words long, with a new caption after
+. ! ?, after a comma once there are 2 words, and on any pause of 0.3 s or more. A caption never ends on "the", "to" or "a", and
+a caption too quick to read gets one more word. Ums are hidden. Each caption stays until the next one starts, and a real
+pause clears the screen. The word being said changes colour, never size, so the line doesn't shift while you talk.
+A caption that's too wide is shrunk to fit on one line instead of wrapping.
+
 ### Tighter clips (on by default)
 
 - **Jump cuts inside every clip.** Dead air, "um"/"uh", and retakes (a line said twice in a row: the last take

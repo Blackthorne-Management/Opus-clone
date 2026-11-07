@@ -61,10 +61,10 @@ def test_hormozi_phrases_are_short_held_and_slightly_early():
     ends = [_t(e.split(",")[2]) for e in ev]
     assert abs(starts[0] - 0.96) < 0.011                    # 40 ms lead
     assert all(abs(ends[i] - starts[i + 1]) < 0.011 for i in range(len(ev) - 1))  # no flicker gaps
-    assert all(len(g) <= 3 and len(" ".join(w["w"] for w in g)) <= 13
-               for g in group_words(words, 3, 0.35, 13))
+    assert all(len(g) <= 3 and len(" ".join(w["w"] for w in g)) <= 16
+               for g in group_words(words, 3, 0.3, 16))
     money = next(e for e in ev if "$5" in e)
-    assert "&H4AFF2B&}$5" in money or "&H4AFF2B&\\fscx122" in money  # money in green
+    assert "&H4AFF2B&}$5" in money                           # money in green
 
 
 def test_hormozi_long_word_shrinks_and_real_pause_clears_screen():
@@ -99,3 +99,49 @@ def test_boundary_left_alone_without_a_clear_dip():
     words = [{"w": "a", "s": 0.6, "e": 1.2}, {"w": "b", "s": 1.2, "e": 1.9}]
     align_word_starts(words, audio)
     assert words[1]["s"] == 1.2
+
+
+def test_spoken_word_changes_colour_never_size():
+    """The stutter: a growing active word widened the line and shifted it on every word."""
+    words, t = [], 1.0
+    for x in "the real reason most people quit".split():
+        words.append({"w": x, "s": t, "e": t + 0.3}); t += 0.35
+    for style in ("hormozi", "bold_pop", "boxed"):
+        ass = build_ass(words, 5, {"caption_style": style}, {})
+        assert "WrapStyle: 2" in ass                             # one line, never re-wrapped
+        for e in _events(ass):
+            text = e.split(",", 9)[9]
+            # no word is ever scaled on its own: the only scaling is the leading tag on a phrase's first event,
+            # which settles the whole line in together
+            words_part = text.split("}", 1)[1] if text.startswith("{\\fs") else text
+            assert "\\fscx" not in words_part
+
+
+def test_phrases_follow_the_edit_skill_rules():
+    from kir_clipper.captions import phrases
+    def ws(text, gap=0.32, dur=0.28, t=0.0):
+        out = []
+        for x in text.split():
+            out.append({"w": x, "s": round(t, 2), "e": round(t + dur, 2)}); t += gap
+        return out
+    # ums are hidden
+    assert all("um" not in [w["w"] for w in p["words"]] for p in phrases(ws("so um I quit"), 3, 16))
+    # a full phrase doesn't end on a weak opener like "to"
+    got = [" ".join(w["w"] for w in p["words"]) for p in phrases(ws("I wanted to build something real"), 3, 16)]
+    assert not any(g.split()[-1] in ("to", "the", "a") for g in got[:-1]), got
+    # a sentence end always breaks, and phrases stay up long enough to read
+    ps = phrases(ws("Stop. Start again now"), 3, 16)
+    assert [w["w"] for w in ps[0]["words"]] == ["Stop."]
+    # long enough to read, unless the next phrase is already starting
+    assert all(p["end"] - p["start"] >= 0.4 - 1e-6 or abs(p["end"] - q["start"]) < 1e-6 for p, q in zip(ps, ps[1:]))
+    # held until the next phrase (no flicker), but a real pause clears the screen
+    ps = phrases(ws("one two three four five six"), 3, 16)
+    assert abs(ps[0]["end"] - ps[1]["start"]) < 1e-6
+    ps = phrases([{"w": "wait", "s": 0, "e": 0.3}, {"w": "now", "s": 2.0, "e": 2.3}], 3, 16)
+    assert abs(ps[0]["end"] - 0.55) < 1e-6
+
+
+def test_long_phrase_is_shrunk_to_one_line():
+    words = [{"w": "unbelievably", "s": 0, "e": 0.4}, {"w": "transformational", "s": 0.45, "e": 0.9}]
+    ev = _events(build_ass(words, 2, {"caption_style": "hormozi", "caption_words": 2}, {}))
+    assert ev and all("\\fs" in e for e in ev)
